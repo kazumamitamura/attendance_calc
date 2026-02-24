@@ -3,12 +3,14 @@
 import { useState } from "react";
 import { calcRequiredDays } from "@/lib/required-days";
 import { calcAdjustedHours } from "@/lib/subject-hours";
+import { downloadAttendanceExcel } from "@/lib/excel-export";
 import { AttendanceDonutChart } from "./charts/AttendanceDonutChart";
 import {
   SubjectHoursDonutChart,
   type SubjectHoursItem,
 } from "./charts/SubjectHoursDonutChart";
 import { BufferProgressBar } from "./charts/BufferProgressBar";
+import { ExportNameModal } from "./ExportNameModal";
 
 export interface SubjectRow {
   name: string;
@@ -35,6 +37,7 @@ export function AttendanceVisualDashboard() {
   const [subjects, setSubjects] = useState<SubjectRow[]>([
     { name: "", plannedHours: 0, minusHours: 0, exchangeHours: 0 },
   ]);
+  const [exportModalOpen, setExportModalOpen] = useState(false);
 
   const scheduled = Number(scheduledDays) || 0;
   const actual = Number(actualDays) || 0;
@@ -71,14 +74,55 @@ export function AttendanceVisualDashboard() {
 
   const subjectChartItems = subjects.map(toSubjectHoursItem);
 
+  const handleExportConfirm = (values: {
+    className: string;
+    lastName: string;
+    firstName: string;
+  }) => {
+    downloadAttendanceExcel({
+      className: values.className,
+      lastName: values.lastName,
+      firstName: values.firstName,
+      scheduledDays: scheduled,
+      actualDays: actual,
+      specialConsideration,
+      requiredDays,
+      shortfallDays: result?.shortfall ?? 0,
+      bufferDays,
+      subjects: subjects.map((s) => ({
+        name: s.name,
+        plannedHours: s.plannedHours,
+        minusHours: s.minusHours,
+        exchangeHours: s.exchangeHours,
+      })),
+    });
+  };
+
   return (
     <section className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-      <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
-        ビジュアルダッシュボード
-      </h2>
-      <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-        登校日数・授業時数の達成状況を一目で確認。余裕日数で色が変わります。
-      </p>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
+            ビジュアルダッシュボード
+          </h2>
+          <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+            登校日数・授業時数の達成状況を一目で確認。余裕日数で色が変わります。
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setExportModalOpen(true)}
+          className="shrink-0 rounded-lg bg-zinc-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
+        >
+          Excel出力
+        </button>
+      </div>
+
+      <ExportNameModal
+        isOpen={exportModalOpen}
+        onClose={() => setExportModalOpen(false)}
+        onConfirm={handleExportConfirm}
+      />
 
       {/* 入力: 登校日数 */}
       <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
