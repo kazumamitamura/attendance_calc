@@ -4,6 +4,7 @@ import React, { useState, useCallback, useEffect, useRef } from "react";
 import { parseScheduleCsv, countClassSlotsWithDuplicates, countFutureClassSlots, getCurrentAcademicYear, type ValidSchoolDay, type ClassSlot } from "@/lib/csv-calendar";
 import { parseClassesCsv } from "@/lib/classes-csv";
 import { getRemainingDaysStatus, getRemainingDaysColors } from "@/lib/class-gauge-status";
+import { downloadPrintExcel } from "@/lib/excel-export-print";
 import { ClassHoursAdjustModal } from "./ClassHoursAdjustModal";
 
 /** 曜日 0=日..6=土、null=なし */
@@ -109,6 +110,8 @@ export function ClassHoursFromCsv({
   const [academicYear, setAcademicYear] = useState<number>(() => getCurrentAcademicYear());
   /** 基準日（残り授業日数の「この日以降」に使う）。YYYY-MM-DD。未入力時は今日で計算 */
   const [referenceDate, setReferenceDate] = useState<string>(() => formatToday());
+  const [classNameExport, setClassNameExport] = useState<string>("");
+  const [studentNameExport, setStudentNameExport] = useState<string>("");
   const lastCsvTextRef = useRef<string | null>(null);
 
   const [className, setClassName] = useState("");
@@ -336,6 +339,49 @@ export function ClassHoursFromCsv({
         faceToFaceDays: 0,
       }));
 
+  const handlePrintExcel = useCallback(async () => {
+    const rows = displayList.map((row) => {
+      const required = row.requiredAttendance ?? 0;
+      const currentAtt = currentAttendances[row.id] ?? 0;
+      const remaining = required > 0 ? required - currentAtt : 0;
+      const slots = toSlots(row.weekdays, row.periods ?? [null, null, null, null]);
+      const remainingClassDays =
+        hasResults && validDays.length > 0
+          ? countFutureClassSlots(validDays, slots, referenceDate.trim() || undefined)
+          : 0;
+      const supplementaryNeeded = Math.max(0, remaining - remainingClassDays);
+      return {
+        name: row.name,
+        requiredAttendance: required,
+        currentAttendance: currentAtt,
+        remainingClassDays,
+        supplementaryNeeded,
+        supplementaryRecords: supplementaryByClass[row.id] ?? [],
+        faceToFaceRecords: faceToFaceRecordsByClass[row.id] ?? [],
+      };
+    });
+    await downloadPrintExcel({
+      academicYear,
+      referenceDate: referenceDate.trim() || formatToday(),
+      className: classNameExport,
+      studentName: studentNameExport,
+      specialConsideration,
+      rows,
+    });
+  }, [
+    displayList,
+    currentAttendances,
+    validDays,
+    hasResults,
+    referenceDate,
+    supplementaryByClass,
+    faceToFaceRecordsByClass,
+    academicYear,
+    classNameExport,
+    studentNameExport,
+    specialConsideration,
+  ]);
+
   return (
     <section className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
       <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
@@ -345,13 +391,13 @@ export function ClassHoursFromCsv({
         年間行事予定CSV（A列=日付、B列=内容、C〜H列=1限〜6限）を読み込み、各時限列に「授業」が入力されている時限を稼働として、各授業の総時数・必要出席日数を算出します。
       </p>
 
-      {/* 対象年度・基準日 */}
+      {/* 対象年度・基準日・クラス・氏名・Excel出力 */}
       <div className="mt-6 rounded-xl border border-zinc-200 bg-zinc-50/50 p-4 dark:border-zinc-700 dark:bg-zinc-800/30">
         <h3 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
-          対象年度・基準日
+          対象年度・基準日・印刷用
         </h3>
         <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
-          残り授業日数は「基準日」以降の日程でカウントします。日付は学校年度（4月〜翌3月）に合わせて解釈されます。
+          残り授業日数は「基準日」以降の日程でカウントします。Excelで印刷するとクラス・氏名付きの帳票が出力されます。
         </p>
         <div className="mt-3 flex flex-wrap items-end gap-4">
           <div>
@@ -368,7 +414,7 @@ export function ClassHoursFromCsv({
               className="mt-1 w-24 rounded border border-zinc-300 bg-white px-3 py-2 text-sm tabular-nums dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
               aria-label="対象年度（学校年度）"
             />
-            <span className="ml-1 text-xs text-zinc-500">年度（4月〜翌3月）</span>
+            <span className="ml-1 text-xs text-zinc-500">年度</span>
           </div>
           <div>
             <label className="block text-xs font-medium text-zinc-500 dark:text-zinc-400">基準日</label>
@@ -380,6 +426,35 @@ export function ClassHoursFromCsv({
               aria-label="基準日（残り授業はこの日以降をカウント）"
             />
           </div>
+          <div>
+            <label className="block text-xs font-medium text-zinc-500 dark:text-zinc-400">クラス名</label>
+            <input
+              type="text"
+              value={classNameExport}
+              onChange={(e) => setClassNameExport(e.target.value)}
+              placeholder="例: 3年1組"
+              className="mt-1 w-24 rounded border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
+              aria-label="クラス名（Excelファイル名・帳票に出力）"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-zinc-500 dark:text-zinc-400">生徒氏名</label>
+            <input
+              type="text"
+              value={studentNameExport}
+              onChange={(e) => setStudentNameExport(e.target.value)}
+              placeholder="例: 山田 太郎"
+              className="mt-1 w-32 rounded border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
+              aria-label="生徒氏名（Excelファイル名・帳票に出力）"
+            />
+          </div>
+          <button
+            type="button"
+            onClick={handlePrintExcel}
+            className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600"
+          >
+            Excelで印刷
+          </button>
         </div>
       </div>
 
