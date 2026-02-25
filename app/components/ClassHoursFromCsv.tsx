@@ -123,6 +123,8 @@ export function ClassHoursFromCsv({
   const [expandedRowId, setExpandedRowId] = useState<string | null>(null);
   /** 補修実施（classId -> { date, content }[]） */
   const [supplementaryByClass, setSupplementaryByClass] = useState<Record<string, { date: string; content: string }[]>>({});
+  /** 対面授業の実施記録（1/2配慮時、classId -> { date, content }[]） */
+  const [faceToFaceRecordsByClass, setFaceToFaceRecordsByClass] = useState<Record<string, { date: string; content: string }[]>>({});
 
   const handleFileChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -195,6 +197,11 @@ export function ClassHoursFromCsv({
     });
     setExpandedRowId((prev) => (prev === id ? null : prev));
     setSupplementaryByClass((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    setFaceToFaceRecordsByClass((prev) => {
       const next = { ...prev };
       delete next[id];
       return next;
@@ -518,9 +525,20 @@ export function ClassHoursFromCsv({
                   const faceToFace = row.faceToFaceDays ?? 0;
                   const isExpanded = expandedRowId === row.id;
                   const supplementaryList = supplementaryByClass[row.id] ?? [];
-                  const numInputs = Math.max(0, remaining);
+                  const numSupplementInputs = supplementaryNeeded;
                   const setSupplementaryAt = (index: number, patch: { date?: string; content?: string }) => {
                     setSupplementaryByClass((prev) => {
+                      const arr = prev[row.id] ?? [];
+                      const next = arr.slice();
+                      while (next.length <= index) next.push({ date: "", content: "" });
+                      next[index] = { ...(next[index] ?? { date: "", content: "" }), ...patch };
+                      return { ...prev, [row.id]: next };
+                    });
+                  };
+                  const faceToFaceRecords = faceToFaceRecordsByClass[row.id] ?? [];
+                  const numFaceToFaceInputs = specialConsideration && faceToFace > 0 ? faceToFace : 0;
+                  const setFaceToFaceRecordAt = (index: number, patch: { date?: string; content?: string }) => {
+                    setFaceToFaceRecordsByClass((prev) => {
                       const arr = prev[row.id] ?? [];
                       const next = arr.slice();
                       while (next.length <= index) next.push({ date: "", content: "" });
@@ -610,13 +628,18 @@ export function ClassHoursFromCsv({
                       </td>
                       <td className="py-2.5 pr-2 text-right">
                         {hasResults ? (
-                          supplementaryNeeded <= 0 ? (
-                            <span className="tabular-nums text-blue-600 dark:text-blue-400">0日</span>
-                          ) : (
-                            <span className="font-bold tabular-nums text-red-600 dark:text-red-400">
-                              補修が必要な日数: {supplementaryNeeded}日
-                            </span>
-                          )
+                          <>
+                            <div className="text-xs text-zinc-500 dark:text-zinc-400">
+                              ①{remaining}日 − ②{remainingClassDays}回 = ③{supplementaryNeeded <= 0 ? "0日" : `${supplementaryNeeded}日不足`}
+                            </div>
+                            {supplementaryNeeded <= 0 ? (
+                              <span className="tabular-nums text-blue-600 dark:text-blue-400">0日</span>
+                            ) : (
+                              <span className="font-bold tabular-nums text-red-600 dark:text-red-400">
+                                補修が必要: {supplementaryNeeded}日
+                              </span>
+                            )}
+                          </>
                         ) : (
                           "—"
                         )}
@@ -659,18 +682,40 @@ export function ClassHoursFromCsv({
                     {isExpanded && (
                       <tr key={`${row.id}-detail`} className="border-b border-zinc-100 bg-zinc-50/50 dark:border-zinc-800 dark:bg-zinc-800/30">
                         <td colSpan={10} className="px-4 py-4">
-                          <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-700 dark:bg-zinc-900">
+                          <div className="space-y-4 rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-700 dark:bg-zinc-900">
+                            {/* 過不足メッセージ */}
                             {remaining <= 0 ? (
                               <p className="text-center text-base font-medium text-emerald-600 dark:text-emerald-400">
                                 🎉 条件達成済み（補修不要）
                               </p>
+                            ) : supplementaryNeeded >= 1 ? (
+                              <div className="rounded-lg border-2 border-red-200 bg-red-50 px-4 py-3 dark:border-red-800 dark:bg-red-950/40">
+                                <p className="text-sm font-bold text-red-700 dark:text-red-300">
+                                  ⚠️ 授業に全て出席しても {supplementaryNeeded} 日不足します。課題等での補修が必要です。
+                                </p>
+                                <p className="mt-1 text-xs text-red-600/90 dark:text-red-400/90">
+                                  ① 条件達成まで {remaining}日 − ② 残り授業 {remainingClassDays}回 = ③ 過不足 {supplementaryNeeded}日
+                                </p>
+                              </div>
                             ) : (
+                              <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 dark:border-blue-800 dark:bg-blue-950/30">
+                                <p className="text-sm font-medium text-blue-700 dark:text-blue-300">
+                                  このまま出席すれば達成可能です
+                                </p>
+                                <p className="mt-1 text-xs text-blue-600/90 dark:text-blue-400/90">
+                                  ① 条件達成まで {remaining}日、② 残り授業 {remainingClassDays}回（③ 過不足 0日）
+                                </p>
+                              </div>
+                            )}
+
+                            {/* 補修フォーム（③の日数だけ） */}
+                            {remaining > 0 && numSupplementInputs >= 1 && (
                               <div className="space-y-3">
                                 <p className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
-                                  補修実施日と実施内容を入力（{numInputs}日分）
+                                  補修実施日と実施内容（不足 {numSupplementInputs} 日分）
                                 </p>
                                 <div className="space-y-3">
-                                  {Array.from({ length: numInputs }, (_, i) => {
+                                  {Array.from({ length: numSupplementInputs }, (_, i) => {
                                     const item = supplementaryList[i] ?? { date: "", content: "" };
                                     return (
                                       <div
@@ -695,6 +740,46 @@ export function ClassHoursFromCsv({
                                           placeholder="実施内容（例: プリント課題）"
                                           className="min-w-[200px] flex-1 rounded border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder-zinc-500"
                                           aria-label={`補修${i + 1} 実施内容`}
+                                        />
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* 対面授業の実施記録（1/2配慮時のみ） */}
+                            {numFaceToFaceInputs >= 1 && (
+                              <div className="space-y-3 border-t border-zinc-200 pt-4 dark:border-zinc-700">
+                                <p className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
+                                  対面授業の実施記録（全 {numFaceToFaceInputs} 回）
+                                </p>
+                                <div className="space-y-3">
+                                  {Array.from({ length: numFaceToFaceInputs }, (_, i) => {
+                                    const item = faceToFaceRecords[i] ?? { date: "", content: "" };
+                                    return (
+                                      <div
+                                        key={i}
+                                        className="flex flex-wrap items-center gap-3 rounded-lg border border-sky-200 bg-sky-50/30 px-3 py-2 dark:border-sky-800 dark:bg-sky-950/20"
+                                        onClick={(e) => e.stopPropagation()}
+                                      >
+                                        <span className="w-16 shrink-0 text-xs font-medium text-sky-600 dark:text-sky-400">
+                                          対面{i + 1}
+                                        </span>
+                                        <input
+                                          type="date"
+                                          value={item.date}
+                                          onChange={(e) => setFaceToFaceRecordAt(i, { date: e.target.value })}
+                                          className="rounded border border-zinc-300 bg-white px-3 py-2 text-sm tabular-nums dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
+                                          aria-label={`対面授業${i + 1} 日付`}
+                                        />
+                                        <input
+                                          type="text"
+                                          value={item.content}
+                                          onChange={(e) => setFaceToFaceRecordAt(i, { content: e.target.value })}
+                                          placeholder="実施内容（例: 対面授業・代替課題）"
+                                          className="min-w-[200px] flex-1 rounded border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder-zinc-500"
+                                          aria-label={`対面授業${i + 1} 実施内容`}
                                         />
                                       </div>
                                     );
