@@ -7,7 +7,7 @@ interface AttendanceDonutChartProps {
   actual: number;
   required: number;
   scheduled: number;
-  /** 残り余裕日数（actual - required）。未指定なら色分けなし */
+  /** 条件達成までの日数（required - actual）。超過時は負。未指定なら色分けなし */
   bufferDays?: number;
 }
 

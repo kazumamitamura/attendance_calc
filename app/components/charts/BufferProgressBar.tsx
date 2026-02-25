@@ -6,7 +6,7 @@ import {
 } from "@/lib/dashboard-status";
 
 interface BufferProgressBarProps {
-  /** 残り余裕日数（実際の登校 - 必要日数）。負なら不足日数 */
+  /** 条件達成までの日数（必要日数 − 実際の登校）。負なら超過達成 */
   bufferDays: number;
   /** 予定日数（プログレスバーの最大幅用） */
   scheduledDays: number;
@@ -40,7 +40,7 @@ export function BufferProgressBar({
     >
       <div className="flex items-center justify-between gap-2">
         <span className={`text-sm font-medium ${colors.text}`}>
-          残り余裕
+          条件達成までの日数
         </span>
         <span className={`text-lg font-bold tabular-nums ${colors.text}`}>
           {label}

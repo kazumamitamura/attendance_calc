@@ -480,7 +480,7 @@ export function ClassHoursFromCsv({
                     対面授業
                   </th>
                   <th className="py-2 pr-2 font-medium text-zinc-600 dark:text-zinc-400">
-                    進捗
+                    条件達成までの日数
                   </th>
                   <th className="py-2 text-center font-medium text-zinc-600 dark:text-zinc-400">
                     操作
@@ -536,7 +536,27 @@ export function ClassHoursFromCsv({
                         )}
                       </td>
                       <td className="py-2.5 pr-2 text-right tabular-nums text-zinc-900 dark:text-zinc-100">
-                        <span className="font-medium">授業出席日数: {currentAtt}日</span>
+                        <div className="flex items-center justify-end gap-1">
+                          <button
+                            type="button"
+                            onClick={() => setCurrentAttendances((prev) => ({ ...prev, [row.id]: Math.max(0, (prev[row.id] ?? 0) - 1) }))}
+                            className="rounded border border-zinc-300 bg-zinc-100 px-1.5 py-0.5 text-xs font-medium text-zinc-600 hover:bg-zinc-200 dark:border-zinc-600 dark:bg-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-600"
+                            aria-label="出席を1減らす"
+                          >
+                            −
+                          </button>
+                          <span className="min-w-[2ch] text-center font-medium">
+                            {currentAtt}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setCurrentAttendances((prev) => ({ ...prev, [row.id]: (prev[row.id] ?? 0) + 1 }))}
+                            className="rounded border border-zinc-300 bg-zinc-100 px-1.5 py-0.5 text-xs font-medium text-zinc-600 hover:bg-zinc-200 dark:border-zinc-600 dark:bg-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-600"
+                            aria-label="出席を1増やす"
+                          >
+                            +
+                          </button>
+                        </div>
                       </td>
                       <td className="py-2.5 pr-2 text-right tabular-nums text-zinc-700 dark:text-zinc-300">
                         対面授業: {faceToFace}日
@@ -550,8 +570,8 @@ export function ClassHoursFromCsv({
                                 style={{ width: `${gaugePercent}%` }}
                               />
                             </div>
-                            <span className={`shrink-0 text-xs tabular-nums ${colors.text}`} title="残り日数">
-                              {remaining}日
+                            <span className={`shrink-0 text-xs tabular-nums ${colors.text}`} title="条件達成までの日数">
+                              {remaining <= 0 ? "達成" : `${remaining}日`}
                             </span>
                           </div>
                         )}

@@ -113,7 +113,7 @@ export function ClassHoursAdjustModal({
               placeholder="0"
               className="mt-1 w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-zinc-900 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
             />
-            <p className="mt-0.5 text-xs text-zinc-500">ゲージの進捗に使用します</p>
+            <p className="mt-0.5 text-xs text-zinc-500">条件達成までの日数のゲージに使用します</p>
           </div>
 
           <div className="flex gap-3 pt-2">

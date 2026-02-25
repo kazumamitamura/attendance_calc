@@ -32,7 +32,7 @@ export function AttendanceDashboardSimple({
         全体の登校日数を管理
       </h2>
       <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-        予定日数・現在の登校日数と達成率、残り余裕を確認します。
+        予定日数・現在の登校日数と達成率、条件達成までの日数を確認します。
       </p>
 
       <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-2">
