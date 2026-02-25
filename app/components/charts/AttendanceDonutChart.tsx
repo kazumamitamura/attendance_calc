@@ -11,8 +11,8 @@ interface AttendanceDonutChartProps {
   bufferDays?: number;
 }
 
-const COLORS = { achieved: "#10b981", shortfall: "#e5e7eb", surplus: "#34d399" };
-const SHORTFALL_COLORS = { safe: "#e5e7eb", warning: "#f59e0b", danger: "#ef4444" };
+const COLORS = { achieved: "#38bdf8", shortfall: "#e2e8f0", surplus: "#a5f3fc" };
+const SHORTFALL_COLORS = { safe: "#e2e8f0", warning: "#6ee7b7", danger: "#f9a8d4" };
 
 export function AttendanceDonutChart({
   actual,

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback, useEffect, useRef } from "react";
-import { parseScheduleCsv, countClassDays, type ValidSchoolDay } from "@/lib/csv-calendar";
+import { parseScheduleCsv, countClassDaysWithDuplicates, type ValidSchoolDay } from "@/lib/csv-calendar";
 import { ClassHoursAdjustModal } from "./ClassHoursAdjustModal";
 
 /** 曜日 0=日..6=土、null=なし */
@@ -48,7 +48,13 @@ function weekdaysDisplay(weekdays: (number | null)[]): string {
   return labels.length > 0 ? labels.join("・") : "—";
 }
 
-export function ClassHoursFromCsv() {
+export function ClassHoursFromCsv({
+  specialConsideration: propSpecialConsideration,
+  onSpecialConsiderationChange,
+}: {
+  specialConsideration?: boolean;
+  onSpecialConsiderationChange?: (value: boolean) => void;
+} = {}) {
   const [csvFile, setCsvFile] = useState<File | null>(null);
   const [validDays, setValidDays] = useState<ValidSchoolDay[]>([]);
   const [parseError, setParseError] = useState<string | null>(null);
@@ -62,7 +68,10 @@ export function ClassHoursFromCsv() {
   ]);
   const [classes, setClasses] = useState<RegisteredClass[]>([]);
   const [results, setResults] = useState<ClassWithResult[]>([]);
-  const [specialConsideration, setSpecialConsideration] = useState(false);
+  const [internalSpecial, setInternalSpecial] = useState(false);
+  const specialConsideration = onSpecialConsiderationChange != null ? (propSpecialConsideration ?? false) : internalSpecial;
+  const setSpecialConsideration = onSpecialConsiderationChange ?? setInternalSpecial;
+  const showToggleBlock = onSpecialConsiderationChange == null;
   const [adjustments, setAdjustments] = useState<Record<string, { add: number; subtract: number }>>({});
   const [editingClassId, setEditingClassId] = useState<string | null>(null);
 
@@ -130,8 +139,7 @@ export function ClassHoursFromCsv() {
     if (validDays.length === 0 || classes.length === 0) return;
     const ratio = specialConsideration ? 1 / 2 : 2 / 3;
     const next: ClassWithResult[] = classes.map((c) => {
-      const weekdaysToCount = c.weekdays.filter((w): w is number => w !== null);
-      const baseHours = countClassDays(validDays, weekdaysToCount);
+      const baseHours = countClassDaysWithDuplicates(validDays, c.weekdays);
       const adj = adjustments[c.id] ?? { add: 0, subtract: 0 };
       const totalHours = Math.max(0, baseHours + adj.add - adj.subtract);
       const requiredAttendance = Math.ceil(totalHours * ratio);
@@ -170,32 +178,33 @@ export function ClassHoursFromCsv() {
         年間行事予定CSV（A列=日付、B列=内容）を読み込み、B列が空白の日を授業実施日として各授業の総時数・必要出席日数を算出します。
       </p>
 
-      {/* 2分の1対応（特別な配慮）— 目立つ位置 */}
-      <div className="mt-6 flex flex-wrap items-center gap-3 rounded-xl border-2 border-amber-200 bg-amber-50/80 px-4 py-3 dark:border-amber-800 dark:bg-amber-950/30">
-        <span className="text-sm font-semibold text-zinc-800 dark:text-zinc-200">
-          特別な配慮が必要な生徒（2分の1対応）
-        </span>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={specialConsideration}
-          onClick={() => setSpecialConsideration((v) => !v)}
-          className={`relative inline-flex h-7 w-12 shrink-0 rounded-full border-2 transition-colors focus:outline-none focus:ring-2 focus:ring-amber-400 ${
-            specialConsideration
-              ? "border-amber-500 bg-amber-500"
-              : "border-zinc-300 bg-zinc-200 dark:border-zinc-600 dark:bg-zinc-700"
-          }`}
-        >
-          <span
-            className={`pointer-events-none inline-block h-6 w-6 transform rounded-full bg-white shadow transition ${
-              specialConsideration ? "translate-x-5" : "translate-x-0.5"
+      {showToggleBlock && (
+        <div className="mt-6 flex flex-wrap items-center gap-3 rounded-xl border-2 border-sky-200 bg-sky-50/80 px-4 py-3 dark:border-sky-800 dark:bg-sky-950/30">
+          <span className="text-sm font-semibold text-zinc-800 dark:text-zinc-200">
+            特別な配慮が必要な生徒（2分の1対応）
+          </span>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={specialConsideration}
+            onClick={() => setSpecialConsideration(!specialConsideration)}
+            className={`relative inline-flex h-7 w-12 shrink-0 rounded-full border-2 transition-colors focus:outline-none focus:ring-2 focus:ring-sky-400 ${
+              specialConsideration
+                ? "border-sky-500 bg-sky-500"
+                : "border-zinc-300 bg-zinc-200 dark:border-zinc-600 dark:bg-zinc-700"
             }`}
-          />
-        </button>
-        <span className="text-sm font-medium text-zinc-600 dark:text-zinc-400">
-          {specialConsideration ? "1/2 で計算" : "2/3 で計算"}
-        </span>
-      </div>
+          >
+            <span
+              className={`pointer-events-none inline-block h-6 w-6 transform rounded-full bg-white shadow transition ${
+                specialConsideration ? "translate-x-5" : "translate-x-0.5"
+              }`}
+            />
+          </button>
+          <span className="text-sm font-medium text-zinc-600 dark:text-zinc-400">
+            {specialConsideration ? "1/2 で計算" : "2/3 で計算"}
+          </span>
+        </div>
+      )}
 
       {/* CSVアップロード */}
       <div className="mt-6">
@@ -330,9 +339,9 @@ export function ClassHoursFromCsv() {
                             {row.totalHours}
                             {hasAdj && (
                               <span className="ml-1 text-xs text-zinc-500 dark:text-zinc-400">
-                                {adj.add > 0 && <span className="text-emerald-600 dark:text-emerald-400">+{adj.add}</span>}
+                                ({adj.add > 0 && <span className="text-emerald-600 dark:text-emerald-400">+{adj.add}</span>}
                                 {adj.add > 0 && adj.subtract > 0 && " "}
-                                {adj.subtract > 0 && <span className="text-red-600 dark:text-red-400">-{adj.subtract}</span>}
+                                {adj.subtract > 0 && <span className="text-rose-600 dark:text-rose-400">-{adj.subtract}</span>})
                               </span>
                             )}
                           </span>

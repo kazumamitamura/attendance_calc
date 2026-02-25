@@ -104,7 +104,27 @@ export function parseScheduleCsv(csvText: string): ValidSchoolDay[] {
 }
 
 /**
- * 授業実施日のリストから、指定曜日（0-6）の日数をカウント
+ * 授業実施日のリストから、選択された曜日配列（重複あり）に従い総授業時数をカウント
+ * 同じ曜日を複数回選んだ場合、その曜日の出現回数 × 選択回数で加算する
+ * 例: 木・木 で CSV の木曜が 18 日 → 18 + 18 = 36
+ */
+export function countClassDaysWithDuplicates(
+  validDays: ValidSchoolDay[],
+  weekdays: (number | null)[]
+): number {
+  const byDay: Record<number, number> = { 0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 };
+  for (const d of validDays) {
+    byDay[d.dayOfWeek] = (byDay[d.dayOfWeek] ?? 0) + 1;
+  }
+  let total = 0;
+  for (const w of weekdays) {
+    if (w !== null && w >= 0 && w <= 6) total += byDay[w] ?? 0;
+  }
+  return total;
+}
+
+/**
+ * 授業実施日のリストから、指定曜日（0-6）の日数をカウント（重複は1回として扱う）
  * weekdays: 例 [1, 3] = 月・水 → 月曜と水曜の合計
  */
 export function countClassDays(
