@@ -62,6 +62,7 @@ export function ClassHoursFromCsv({
   const [parseError, setParseError] = useState<string | null>(null);
 
   const [className, setClassName] = useState("");
+  const [initialAttendance, setInitialAttendance] = useState<number>(0);
   const [classWeekdays, setClassWeekdays] = useState<(number | null)[]>([
     null,
     null,
@@ -113,11 +114,15 @@ export function ClassHoursFromCsv({
   const handleAddClass = () => {
     const name = className.trim();
     if (!name) return;
+    const id = generateId();
+    const attendance = initialAttendance ?? 0;
     setClasses((prev) => [
       ...prev,
-      { id: generateId(), name, weekdays: [...classWeekdays] },
+      { id, name, weekdays: [...classWeekdays] },
     ]);
+    setCurrentAttendances((prev) => ({ ...prev, [id]: attendance }));
     setClassName("");
+    setInitialAttendance(0);
     setClassWeekdays([null, null, null, null]);
   };
 
@@ -159,6 +164,13 @@ export function ClassHoursFromCsv({
           }));
           setParseError(null);
           setClasses((prev) => [...prev, ...newClasses]);
+          setCurrentAttendances((prev) => {
+            const next = { ...prev };
+            newClasses.forEach((c, i) => {
+              next[c.id] = rows[i]?.attendanceCount ?? 0;
+            });
+            return next;
+          });
         } catch (err) {
           setParseError(err instanceof Error ? err.message : "授業CSVの解析に失敗しました。");
         }
@@ -289,6 +301,17 @@ export function ClassHoursFromCsv({
               className="mt-0.5 w-full rounded border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
             />
           </div>
+          <div className="w-24">
+            <label className="block text-xs text-zinc-500">授業出席数（初期値）</label>
+            <input
+              type="number"
+              min={0}
+              value={initialAttendance === 0 ? "" : initialAttendance}
+              onChange={(e) => setInitialAttendance(Math.max(0, parseInt(e.target.value, 10) || 0))}
+              placeholder="0"
+              className="mt-0.5 w-full rounded border border-zinc-300 bg-white px-3 py-2 text-sm tabular-nums dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
+            />
+          </div>
           <div className="flex flex-wrap items-end gap-2">
             <span className="text-xs text-zinc-500">曜日（最大4つ）</span>
             {[0, 1, 2, 3].map((i) => (
@@ -327,7 +350,7 @@ export function ClassHoursFromCsv({
           </label>
         </div>
         <p className="mt-2 text-xs text-zinc-500">
-          一括登録CSV: A列=授業名, B〜E列=曜日①〜④（月・火・水... または 1〜6, 0=日）。ヘッダーあり/なし両対応。
+          一括登録CSV: A列=授業名, B列=授業出席日数, C〜F列=曜日①〜④（月・火・水... または 1〜6, 0=日）。ヘッダーあり/なし両対応。
         </p>
       </div>
 
