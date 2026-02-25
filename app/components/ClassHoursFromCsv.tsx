@@ -97,7 +97,7 @@ export function ClassHoursFromCsv({
         try {
           const days = parseScheduleCsv(text);
           setValidDays(days);
-          if (days.length === 0) setParseError("授業実施日（C列が空白の行）がありませんでした。");
+          if (days.length === 0) setParseError("授業実施日（C列に「授業」が入力された行）がありませんでした。");
         } catch (err) {
           setParseError(err instanceof Error ? err.message : "CSVの解析に失敗しました。");
         }
@@ -248,7 +248,7 @@ export function ClassHoursFromCsv({
         CSVマスターで授業時数をカウント
       </h2>
       <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-        年間行事予定CSV（A列=日付、B列=内容、C列=授業時数など）を読み込み、C列が空白の日を授業実施日として各授業の総時数・必要出席日数を算出します。
+        年間行事予定CSV（A列=日付、B列=内容、C列=授業時数など）を読み込み、C列に「授業」が入力されている行を授業実施日として各授業の総時数・必要出席日数を算出します。
       </p>
 
       {showToggleBlock && (

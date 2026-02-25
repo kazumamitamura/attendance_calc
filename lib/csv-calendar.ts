@@ -1,7 +1,7 @@
 /**
  * 年間行事予定CSVの読み込みと解析
  * A列: 日付（例: 04月 01日(火) または YYYY-MM-DD）, B列: 内容, C列: 授業時数など。
- * C列が空白（空文字）の行のみ「授業実施日（有効日）」としてカウントする。
+ * C列に「授業」という文字列が入力されている行のみ「授業実施日（有効日）」としてカウントする（オプトイン方式）。
  */
 
 import Papa from "papaparse";
@@ -46,13 +46,11 @@ function parseMonthDayForSort(str: string): Date | null {
 }
 
 /**
- * C列（授業時数など）が空白かどうか
- * 未定義・null・空文字・半角・全角スペースのみのセルも空白とみなす
+ * C列が「授業」かどうか（前後のスペース除去後の完全一致。ヒューマンエラー対策）
+ * C列が存在しない・null・空文字の場合は false
  */
-function isColumnCEmpty(value: unknown): boolean {
-  const s = String(value ?? "").trim();
-  const normalized = s.replace(/\s/g, "").replace(/\u3000/g, "");
-  return normalized === "";
+function isColumnCClass(value: unknown): boolean {
+  return String(value ?? "").trim() === "授業";
 }
 
 /**
@@ -65,9 +63,9 @@ function isHeaderRow(row: unknown): boolean {
 }
 
 /**
- * CSVテキストを解析し、授業実施日（C列が空白の日）のみ抽出する
+ * CSVテキストを解析し、授業実施日（C列に「授業」が入力されている行）のみ抽出する
  * - 曜日は A列の (月)〜(日) を直接抽出（Date は使わない）
- * - C列（3列目）は trim のうえ空白の行のみ有効日。C列がない行も空白とみなす
+ * - C列（3列目）は trim のうえ「授業」と一致する行のみ有効日。C列がない行は対象外
  * - 1行目がヘッダーの場合はスキップ。末尾の空行・列不足行は安全にスキップ
  */
 export function parseScheduleCsv(csvText: string): ValidSchoolDay[] {
@@ -89,7 +87,7 @@ export function parseScheduleCsv(csvText: string): ValidSchoolDay[] {
     const columnC = row[2]; // C列（0=A, 1=B, 2=C）
 
     if (!dateRaw) continue;
-    if (!isColumnCEmpty(columnC)) continue;
+    if (!isColumnCClass(columnC)) continue;
 
     const dayOfWeek = parseWeekdayFromString(dateRaw);
     if (dayOfWeek === null) continue;
