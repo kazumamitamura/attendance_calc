@@ -2,6 +2,8 @@
 
 import { useState, useCallback, useEffect, useRef } from "react";
 import { parseScheduleCsv, countClassDaysWithDuplicates, type ValidSchoolDay } from "@/lib/csv-calendar";
+import { parseClassesCsv } from "@/lib/classes-csv";
+import { getRemainingDaysStatus, getRemainingDaysColors } from "@/lib/class-gauge-status";
 import { ClassHoursAdjustModal } from "./ClassHoursAdjustModal";
 
 /** 曜日 0=日..6=土、null=なし */
@@ -73,6 +75,7 @@ export function ClassHoursFromCsv({
   const setSpecialConsideration = onSpecialConsiderationChange ?? setInternalSpecial;
   const showToggleBlock = onSpecialConsiderationChange == null;
   const [adjustments, setAdjustments] = useState<Record<string, { add: number; subtract: number }>>({});
+  const [currentAttendances, setCurrentAttendances] = useState<Record<string, number>>({});
   const [editingClassId, setEditingClassId] = useState<string | null>(null);
 
   const handleFileChange = useCallback(
@@ -116,7 +119,6 @@ export function ClassHoursFromCsv({
     ]);
     setClassName("");
     setClassWeekdays([null, null, null, null]);
-    setResults([]);
   };
 
   const handleRemoveClass = (id: string) => {
@@ -127,13 +129,45 @@ export function ClassHoursFromCsv({
       delete next[id];
       return next;
     });
+    setCurrentAttendances((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
     if (editingClassId === id) setEditingClassId(null);
   };
 
-  const handleSaveAdjustment = (id: string, add: number, subtract: number) => {
+  const handleSaveAdjustment = (id: string, add: number, subtract: number, currentAttendance: number) => {
     setAdjustments((prev) => ({ ...prev, [id]: { add, subtract } }));
+    setCurrentAttendances((prev) => ({ ...prev, [id]: currentAttendance }));
     setEditingClassId(null);
   };
+
+  const handleBulkClassesCsv = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const text = String(reader.result ?? "");
+        try {
+          const rows = parseClassesCsv(text);
+          const newClasses: RegisteredClass[] = rows.map((r) => ({
+            id: generateId(),
+            name: r.name,
+            weekdays: r.weekdays,
+          }));
+          setParseError(null);
+          setClasses((prev) => [...prev, ...newClasses]);
+        } catch (err) {
+          setParseError(err instanceof Error ? err.message : "授業CSVの解析に失敗しました。");
+        }
+      };
+      reader.readAsText(file, "UTF-8");
+      e.target.value = "";
+    },
+    []
+  );
 
   const runCount = useCallback(() => {
     if (validDays.length === 0 || classes.length === 0) return;
@@ -165,6 +199,11 @@ export function ClassHoursFromCsv({
   useEffect(() => {
     if (results.length > 0) runCount();
   }, [adjustments, runCount]);
+
+  // 授業が追加されたとき（一括含む）にカウント実行
+  useEffect(() => {
+    if (validDays.length > 0 && classes.length > 0) runCount();
+  }, [classes.length, validDays.length, runCount]);
 
   const hasResults = results.length > 0;
   const displayList = hasResults ? results : classes.map((c) => ({ ...c, totalHours: 0, requiredAttendance: 0 }));
@@ -277,7 +316,19 @@ export function ClassHoursFromCsv({
           >
             授業を追加
           </button>
+          <label className="cursor-pointer rounded-lg border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700">
+            <input
+              type="file"
+              accept=".csv"
+              onChange={handleBulkClassesCsv}
+              className="sr-only"
+            />
+            授業をCSVで一括登録
+          </label>
         </div>
+        <p className="mt-2 text-xs text-zinc-500">
+          一括登録CSV: A列=授業名, B〜E列=曜日①〜④（月・火・水... または 1〜6, 0=日）。ヘッダーあり/なし両対応。
+        </p>
       </div>
 
       {/* 授業一覧 + カウント */}
@@ -298,7 +349,7 @@ export function ClassHoursFromCsv({
           </div>
 
           <div className="mt-3 overflow-x-auto">
-            <table className="w-full min-w-[520px] border-collapse text-sm">
+            <table className="w-full min-w-[640px] border-collapse text-sm">
               <thead>
                 <tr className="border-b border-zinc-200 dark:border-zinc-700">
                   <th className="py-2 pr-2 text-left font-medium text-zinc-600 dark:text-zinc-400">
@@ -313,6 +364,9 @@ export function ClassHoursFromCsv({
                   <th className="py-2 pr-2 text-right font-medium text-zinc-600 dark:text-zinc-400">
                     必要出席日数（{specialConsideration ? "1/2" : "2/3"}）
                   </th>
+                  <th className="py-2 pr-2 font-medium text-zinc-600 dark:text-zinc-400">
+                    進捗
+                  </th>
                   <th className="py-2 text-center font-medium text-zinc-600 dark:text-zinc-400">
                     操作
                   </th>
@@ -322,6 +376,12 @@ export function ClassHoursFromCsv({
                 {displayList.map((row) => {
                   const adj = adjustments[row.id] ?? { add: 0, subtract: 0 };
                   const hasAdj = adj.add > 0 || adj.subtract > 0;
+                  const currentAtt = currentAttendances[row.id] ?? 0;
+                  const required = row.requiredAttendance;
+                  const remaining = required > 0 ? required - currentAtt : 0;
+                  const status = getRemainingDaysStatus(remaining);
+                  const colors = getRemainingDaysColors(status);
+                  const gaugePercent = required > 0 ? Math.min(100, Math.round((100 * currentAtt) / required)) : 0;
                   return (
                     <tr
                       key={row.id}
@@ -351,6 +411,21 @@ export function ClassHoursFromCsv({
                       </td>
                       <td className="py-2.5 pr-2 text-right tabular-nums text-zinc-900 dark:text-zinc-100">
                         {hasResults ? row.requiredAttendance : "—"}
+                      </td>
+                      <td className="py-2.5 pr-2">
+                        {hasResults && (
+                          <div className="flex min-w-[100px] items-center gap-2">
+                            <div className="h-2 flex-1 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-700">
+                              <div
+                                className={`h-full rounded-full transition-all ${colors.bar}`}
+                                style={{ width: `${gaugePercent}%` }}
+                              />
+                            </div>
+                            <span className={`shrink-0 text-xs tabular-nums ${colors.text}`} title="残り日数">
+                              {remaining}日
+                            </span>
+                          </div>
+                        )}
                       </td>
                       <td className="py-2.5">
                         <div className="flex items-center justify-center gap-1">
@@ -383,6 +458,7 @@ export function ClassHoursFromCsv({
       {editingClassId && (() => {
         const cls = classes.find((c) => c.id === editingClassId);
         const adj = adjustments[editingClassId] ?? { add: 0, subtract: 0 };
+        const curAtt = currentAttendances[editingClassId] ?? 0;
         return cls ? (
           <ClassHoursAdjustModal
             isOpen={true}
@@ -390,8 +466,9 @@ export function ClassHoursFromCsv({
             className={cls.name}
             currentAdd={adj.add}
             currentSubtract={adj.subtract}
+            currentAttendance={curAtt}
             onClose={() => setEditingClassId(null)}
-            onSave={(add, subtract) => handleSaveAdjustment(editingClassId, add, subtract)}
+            onSave={(add, subtract, currentAttendance) => handleSaveAdjustment(editingClassId, add, subtract, currentAttendance)}
           />
         ) : null;
       })()}

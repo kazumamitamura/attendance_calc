@@ -13,8 +13,9 @@ interface ClassHoursAdjustModalProps {
   className: string;
   currentAdd: number;
   currentSubtract: number;
+  currentAttendance: number;
   onClose: () => void;
-  onSave: (add: number, subtract: number) => void;
+  onSave: (add: number, subtract: number, currentAttendance: number) => void;
 }
 
 export function ClassHoursAdjustModal({
@@ -23,22 +24,25 @@ export function ClassHoursAdjustModal({
   className,
   currentAdd,
   currentSubtract,
+  currentAttendance,
   onClose,
   onSave,
 }: ClassHoursAdjustModalProps) {
   const [add, setAdd] = useState(currentAdd);
   const [subtract, setSubtract] = useState(currentSubtract);
+  const [attendance, setAttendance] = useState(currentAttendance);
 
   useEffect(() => {
     if (isOpen) {
       setAdd(currentAdd);
       setSubtract(currentSubtract);
+      setAttendance(currentAttendance);
     }
-  }, [isOpen, classId, currentAdd, currentSubtract]);
+  }, [isOpen, classId, currentAdd, currentSubtract, currentAttendance]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    onSave(add, subtract);
+    onSave(add, subtract, attendance);
     onClose();
   };
 
@@ -95,6 +99,21 @@ export function ClassHoursAdjustModal({
               placeholder="0"
               className="mt-1 w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-zinc-900 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
             />
+          </div>
+          <div>
+            <label htmlFor="adjust-attendance" className="block text-sm font-medium text-zinc-700 dark:text-zinc-300">
+              現在の出席時数
+            </label>
+            <input
+              id="adjust-attendance"
+              type="number"
+              min={0}
+              value={attendance === 0 ? "" : attendance}
+              onChange={(e) => setAttendance(Math.max(0, parseInt(e.target.value, 10) || 0))}
+              placeholder="0"
+              className="mt-1 w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-zinc-900 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
+            />
+            <p className="mt-0.5 text-xs text-zinc-500">ゲージの進捗に使用します</p>
           </div>
 
           <div className="flex gap-3 pt-2">
