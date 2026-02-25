@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback, useEffect, useRef } from "react";
-import { parseScheduleCsv, countClassDaysWithDuplicates, type ValidSchoolDay } from "@/lib/csv-calendar";
+import { parseScheduleCsv, countClassSlotsWithDuplicates, type ValidSchoolDay, type ClassSlot } from "@/lib/csv-calendar";
 import { parseClassesCsv } from "@/lib/classes-csv";
 import { getRemainingDaysStatus, getRemainingDaysColors } from "@/lib/class-gauge-status";
 import { ClassHoursAdjustModal } from "./ClassHoursAdjustModal";
@@ -18,6 +18,17 @@ const WEEKDAY_OPTIONS: { value: number | null; label: string }[] = [
   { value: 6, label: "土" },
 ];
 
+/** 時限 1〜6、null=なし */
+const PERIOD_OPTIONS: { value: number | null; label: string }[] = [
+  { value: null, label: "なし" },
+  { value: 1, label: "1限" },
+  { value: 2, label: "2限" },
+  { value: 3, label: "3限" },
+  { value: 4, label: "4限" },
+  { value: 5, label: "5限" },
+  { value: 6, label: "6限" },
+];
+
 const WEEKDAY_LABELS: Record<number, string> = {
   0: "日",
   1: "月",
@@ -31,7 +42,10 @@ const WEEKDAY_LABELS: Record<number, string> = {
 export interface RegisteredClass {
   id: string;
   name: string;
-  weekdays: (number | null)[]; // 最大4、各要素は 0-6 または なし
+  /** 曜日①〜④（0-6 または null） */
+  weekdays: (number | null)[];
+  /** 時限①〜④（1-6 または null）。同じインデックスで曜日・時限の1セット */
+  periods: (number | null)[];
 }
 
 interface ClassWithResult extends RegisteredClass {
@@ -47,11 +61,29 @@ function generateId(): string {
   return Math.random().toString(36).slice(2, 12);
 }
 
-function weekdaysDisplay(weekdays: (number | null)[]): string {
-  const labels = weekdays
-    .filter((w): w is number => w !== null)
-    .map((w) => WEEKDAY_LABELS[w]);
-  return labels.length > 0 ? labels.join("・") : "—";
+function slotsDisplay(weekdays: (number | null)[], periods: (number | null)[]): string {
+  const parts: string[] = [];
+  for (let i = 0; i < 4; i++) {
+    const w = weekdays[i];
+    const p = periods[i];
+    if (w != null && p != null && p >= 1 && p <= 6) {
+      parts.push(`${WEEKDAY_LABELS[w]}・${p}限`);
+    }
+  }
+  return parts.length > 0 ? parts.join("、") : "—";
+}
+
+/** 有効なスロットのみ ClassSlot[] に変換（曜日・時限の両方があるもの） */
+function toSlots(weekdays: (number | null)[], periods: (number | null)[]): ClassSlot[] {
+  const slots: ClassSlot[] = [];
+  for (let i = 0; i < 4; i++) {
+    const w = weekdays[i];
+    const p = periods[i];
+    if (w != null && w >= 0 && w <= 6 && p != null && p >= 1 && p <= 6) {
+      slots.push({ weekday: w, period: p });
+    }
+  }
+  return slots;
 }
 
 export function ClassHoursFromCsv({
@@ -68,6 +100,12 @@ export function ClassHoursFromCsv({
   const [className, setClassName] = useState("");
   const [initialAttendance, setInitialAttendance] = useState<number>(0);
   const [classWeekdays, setClassWeekdays] = useState<(number | null)[]>([
+    null,
+    null,
+    null,
+    null,
+  ]);
+  const [classPeriods, setClassPeriods] = useState<(number | null)[]>([
     null,
     null,
     null,
@@ -97,7 +135,7 @@ export function ClassHoursFromCsv({
         try {
           const days = parseScheduleCsv(text);
           setValidDays(days);
-          if (days.length === 0) setParseError("授業実施日（C列に「授業」が入力された行）がありませんでした。");
+          if (days.length === 0) setParseError("授業実施日（C〜H列のいずれかに「授業」が入力された行）がありませんでした。");
         } catch (err) {
           setParseError(err instanceof Error ? err.message : "CSVの解析に失敗しました。");
         }
@@ -115,6 +153,14 @@ export function ClassHoursFromCsv({
     });
   };
 
+  const setPeriodAt = (index: number, value: number | null) => {
+    setClassPeriods((prev) => {
+      const next = [...prev];
+      next[index] = value;
+      return next;
+    });
+  };
+
   const handleAddClass = () => {
     const name = className.trim();
     if (!name) return;
@@ -122,12 +168,13 @@ export function ClassHoursFromCsv({
     const attendance = initialAttendance ?? 0;
     setClasses((prev) => [
       ...prev,
-      { id, name, weekdays: [...classWeekdays] },
+      { id, name, weekdays: [...classWeekdays], periods: [...classPeriods] },
     ]);
     setCurrentAttendances((prev) => ({ ...prev, [id]: attendance }));
     setClassName("");
     setInitialAttendance(0);
     setClassWeekdays([null, null, null, null]);
+    setClassPeriods([null, null, null, null]);
   };
 
   const handleRemoveClass = (id: string) => {
@@ -165,6 +212,7 @@ export function ClassHoursFromCsv({
             id: generateId(),
             name: r.name,
             weekdays: r.weekdays,
+            periods: r.periods ?? [null, null, null, null],
           }));
           setParseError(null);
           setClasses((prev) => [...prev, ...newClasses]);
@@ -190,7 +238,8 @@ export function ClassHoursFromCsv({
     const isSpecialCare = specialConsideration;
     const ratio = isSpecialCare ? 1 / 2 : 2 / 3;
     const next: ClassWithResult[] = classes.map((c) => {
-      const baseHours = countClassDaysWithDuplicates(validDays, c.weekdays);
+      const slots = toSlots(c.weekdays, c.periods ?? [null, null, null, null]);
+      const baseHours = countClassSlotsWithDuplicates(validDays, slots);
       const adj = adjustments[c.id] ?? { add: 0, subtract: 0 };
       const totalHours = Math.max(0, baseHours + adj.add - adj.subtract);
       const requiredAttendance = Math.ceil(totalHours * ratio);
@@ -248,7 +297,7 @@ export function ClassHoursFromCsv({
         CSVマスターで授業時数をカウント
       </h2>
       <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-        年間行事予定CSV（A列=日付、B列=内容、C列=授業時数など）を読み込み、C列に「授業」が入力されている行を授業実施日として各授業の総時数・必要出席日数を算出します。
+        年間行事予定CSV（A列=日付、B列=内容、C〜H列=1限〜6限）を読み込み、各時限列に「授業」が入力されている時限を稼働として、各授業の総時数・必要出席日数を算出します。
       </p>
 
       {showToggleBlock && (
@@ -296,7 +345,7 @@ export function ClassHoursFromCsv({
           </label>
           {validDays.length > 0 && (
             <span className="text-sm text-emerald-600 dark:text-emerald-400">
-              授業実施日 {validDays.length} 日を読み込みました
+              授業実施データ {validDays.length} 件を読み込みました
             </span>
           )}
           {parseError && (
@@ -335,23 +384,38 @@ export function ClassHoursFromCsv({
             />
           </div>
           <div className="flex flex-wrap items-end gap-2">
-            <span className="text-xs text-zinc-500">曜日（最大4つ）</span>
+            <span className="text-xs text-zinc-500">曜日・時限（最大4セット）</span>
             {[0, 1, 2, 3].map((i) => (
-              <select
-                key={i}
-                value={classWeekdays[i] === null ? "" : String(classWeekdays[i])}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  setWeekdayAt(i, v === "" ? null : parseInt(v, 10));
-                }}
-                className="rounded border border-zinc-300 bg-white px-2 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
-              >
-                {WEEKDAY_OPTIONS.map((opt) => (
-                  <option key={opt.label} value={opt.value === null ? "" : String(opt.value)}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
+              <span key={i} className="inline-flex items-center gap-1 rounded border border-zinc-200 bg-white px-2 py-1 dark:border-zinc-600 dark:bg-zinc-800">
+                <select
+                  value={classWeekdays[i] === null ? "" : String(classWeekdays[i])}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setWeekdayAt(i, v === "" ? null : parseInt(v, 10));
+                  }}
+                  className="rounded border-0 bg-transparent py-1 text-sm dark:text-zinc-100"
+                >
+                  {WEEKDAY_OPTIONS.map((opt) => (
+                    <option key={opt.label} value={opt.value === null ? "" : String(opt.value)}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={classPeriods[i] === null ? "" : String(classPeriods[i])}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setPeriodAt(i, v === "" ? null : parseInt(v, 10));
+                  }}
+                  className="rounded border-0 bg-transparent py-1 text-sm dark:text-zinc-100"
+                >
+                  {PERIOD_OPTIONS.map((opt) => (
+                    <option key={opt.label} value={opt.value === null ? "" : String(opt.value)}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              </span>
             ))}
           </div>
           <button
@@ -372,7 +436,7 @@ export function ClassHoursFromCsv({
           </label>
         </div>
         <p className="mt-2 text-xs text-zinc-500">
-          一括登録CSV: A列=授業名, B列=授業出席日数, C〜F列=曜日①〜④（月・火・水... または 1〜6, 0=日）。ヘッダーあり/なし両対応。
+          一括登録CSV: A列=授業名, B列=授業出席日数, C列=曜日①・D列=時限①, E列=曜日②・F列=時限②, G列=曜日③・H列=時限③, I列=曜日④・J列=時限④。時限は1〜6の数値。ヘッダーあり/なし両対応。
         </p>
       </div>
 
@@ -401,7 +465,7 @@ export function ClassHoursFromCsv({
                     授業名
                   </th>
                   <th className="py-2 pr-2 text-left font-medium text-zinc-600 dark:text-zinc-400">
-                    設定曜日
+                    設定（曜日・時限）
                   </th>
                   <th className="py-2 pr-2 text-right font-medium text-zinc-600 dark:text-zinc-400">
                     総授業時数
@@ -443,7 +507,7 @@ export function ClassHoursFromCsv({
                         {row.name}
                       </td>
                       <td className="py-2.5 pr-2 text-zinc-600 dark:text-zinc-400">
-                        {weekdaysDisplay(row.weekdays)}
+                        {slotsDisplay(row.weekdays, row.periods ?? [null, null, null, null])}
                       </td>
                       <td className="py-2.5 pr-2 text-right tabular-nums text-zinc-900 dark:text-zinc-100">
                         {hasResults ? (

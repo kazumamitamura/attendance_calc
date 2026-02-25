@@ -1,6 +1,8 @@
 /**
  * 授業一括登録CSVの解析
- * A列: 授業名, B列: 授業出席日数, C〜F列: 曜日①〜④。ヘッダーあり/なし両対応。
+ * A列: 授業名, B列: 授業出席日数,
+ * C列: 曜日①, D列: 時限①, E列: 曜日②, F列: 時限②, G列: 曜日③, H列: 時限③, I列: 曜日④, J列: 時限④
+ * ヘッダーあり/なし両対応。
  */
 
 import Papa from "papaparse";
@@ -18,6 +20,15 @@ function parseWeekdayCell(value: unknown): number | null {
   const num = parseInt(s, 10);
   if (Number.isInteger(num) && num >= 0 && num <= 6) return num;
   return null;
+}
+
+/** 時限セルを 1〜6 に。空欄・不正は null */
+function parsePeriodCell(value: unknown): number | null {
+  const s = String(value ?? "").trim();
+  if (!s) return null;
+  const n = parseInt(s, 10);
+  if (!Number.isInteger(n) || n < 1 || n > 6) return null;
+  return n;
 }
 
 /** B列を数値に。空欄・数値以外は 0 */
@@ -43,11 +54,14 @@ export interface ParsedClassRow {
   name: string;
   /** 授業出席日数（現在の出席時数の初期値）。未入力・不正は 0 */
   attendanceCount: number;
+  /** 曜日①〜④（0-6 または null） */
   weekdays: (number | null)[];
+  /** 時限①〜④（1-6 または null）。同じインデックスが1スロット */
+  periods: (number | null)[];
 }
 
 /**
- * 授業登録CSVを解析。A=授業名, B=授業出席日数, C〜F=曜日①〜④。
+ * 授業登録CSVを解析。A=授業名, B=授業出席日数, C,D=曜日①・時限①, E,F=曜日②・時限②, G,H=曜日③・時限③, I,J=曜日④・時限④
  */
 export function parseClassesCsv(csvText: string): ParsedClassRow[] {
   const parsed = Papa.parse<string[]>(csvText, { skipEmptyLines: true });
@@ -61,11 +75,14 @@ export function parseClassesCsv(csvText: string): ParsedClassRow[] {
 
     const attendanceCount = parseAttendanceCell(row?.[1]);
     const weekdays: (number | null)[] = [];
-    for (let i = 2; i <= 5; i++) {
-      const w = parseWeekdayCell(row?.[i]);
-      weekdays.push(w ?? null);
+    const periods: (number | null)[] = [];
+    for (let i = 0; i < 4; i++) {
+      const colW = 2 + i * 2; // C, E, G, I
+      const colP = 3 + i * 2; // D, F, H, J
+      weekdays.push(parseWeekdayCell(row?.[colW]) ?? null);
+      periods.push(parsePeriodCell(row?.[colP]) ?? null);
     }
-    result.push({ name, attendanceCount, weekdays });
+    result.push({ name, attendanceCount, weekdays, periods });
   }
 
   return result;

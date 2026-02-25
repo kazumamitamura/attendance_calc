@@ -1,17 +1,19 @@
 /**
  * 年間行事予定CSVの読み込みと解析
- * A列: 日付（例: 04月 01日(火) または YYYY-MM-DD）, B列: 内容, C列: 授業時数など。
- * C列に「授業」という文字列が入力されている行のみ「授業実施日（有効日）」としてカウントする（オプトイン方式）。
+ * A列: 日付, B列: 内容, C〜H列: 1限〜6限。
+ * 各時限列に「授業」（trim 完全一致）が入力されている場合、その日のその時限を稼働として記録する。
  */
 
 import Papa from "papaparse";
 
 export interface ValidSchoolDay {
-  /** 表示用（A列のトリム済み値または YYYY-MM-DD） */
+  /** 表示用（A列のトリム済み値） */
   dateStr: string;
   /** 0=日, 1=月, ..., 6=土。A列の (月)〜(日) から直接抽出 */
   dayOfWeek: number;
   date: Date;
+  /** その日に稼働している時限の配列（1〜6）。C列=1限〜H列=6限で「授業」の列 */
+  activePeriods: number[];
 }
 
 /** (日)(月)(火)(水)(木)(金)(土) を検索して曜日コード 0〜6 を返す。見つからなければ null */
@@ -45,11 +47,8 @@ function parseMonthDayForSort(str: string): Date | null {
   return date;
 }
 
-/**
- * C列が「授業」かどうか（前後のスペース除去後の完全一致。ヒューマンエラー対策）
- * C列が存在しない・null・空文字の場合は false
- */
-function isColumnCClass(value: unknown): boolean {
+/** セルが「授業」かどうか（trim 完全一致）。未定義・null・空は false */
+function isPeriodClass(value: unknown): boolean {
   return String(value ?? "").trim() === "授業";
 }
 
@@ -63,10 +62,9 @@ function isHeaderRow(row: unknown): boolean {
 }
 
 /**
- * CSVテキストを解析し、授業実施日（C列に「授業」が入力されている行）のみ抽出する
- * - 曜日は A列の (月)〜(日) を直接抽出（Date は使わない）
- * - C列（3列目）は trim のうえ「授業」と一致する行のみ有効日。C列がない行は対象外
- * - 1行目がヘッダーの場合はスキップ。末尾の空行・列不足行は安全にスキップ
+ * CSVテキストを解析し、各日ごとに「稼働している時限」を保持するリストを返す
+ * - A列で日付・曜日を取得。C列(1限)〜H列(6限)を独立にチェックし、「授業」の列を activePeriods に格納
+ * - いずれかの時限が「授業」である行のみ結果に含める
  */
 export function parseScheduleCsv(csvText: string): ValidSchoolDay[] {
   const parsed = Papa.parse<string[]>(csvText, {
@@ -84,19 +82,25 @@ export function parseScheduleCsv(csvText: string): ValidSchoolDay[] {
     if (!row || !Array.isArray(row)) continue;
 
     const dateRaw = String(row[0] ?? "").trim();
-    const columnC = row[2]; // C列（0=A, 1=B, 2=C）
-
     if (!dateRaw) continue;
-    if (!isColumnCClass(columnC)) continue;
 
     const dayOfWeek = parseWeekdayFromString(dateRaw);
     if (dayOfWeek === null) continue;
+
+    const activePeriods: number[] = [];
+    for (let p = 1; p <= 6; p++) {
+      const colIndex = p + 1; // C=2(1限), D=3(2限), ..., H=7(6限)
+      const cell = row[colIndex];
+      if (isPeriodClass(cell)) activePeriods.push(p);
+    }
+    if (activePeriods.length === 0) continue;
 
     const dateForSort = parseMonthDayForSort(dateRaw) ?? new Date(0);
     result.push({
       dateStr: dateRaw,
       dayOfWeek,
       date: dateForSort,
+      activePeriods,
     });
   }
 
@@ -104,26 +108,35 @@ export function parseScheduleCsv(csvText: string): ValidSchoolDay[] {
   return result;
 }
 
-/**
- * 授業実施日のリストから、選択された曜日配列（重複あり）に従い総授業時数をカウント。
- * 選択された配列の要素ごとに該当曜日のカウント数を取得し、単純に全て足し合わせる（完全加算）。
- * 例: 木=25日・火=50日、授業の曜日が [木, 木, 火] → 25+25+50 = 100日
- */
-export function countClassDaysWithDuplicates(
-  validDays: ValidSchoolDay[],
-  weekdays: (number | null)[]
-): number {
-  const byDay: Record<number, number> = { 0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 };
-  for (const d of validDays) {
-    byDay[d.dayOfWeek] = (byDay[d.dayOfWeek] ?? 0) + 1;
-  }
-  const selectedDays = weekdays.filter((w): w is number => w !== null && w >= 0 && w <= 6);
-  return selectedDays.reduce((total, day) => total + (byDay[day] ?? 0), 0);
+/** 授業の1スロット = 曜日 + 時限のペア */
+export interface ClassSlot {
+  weekday: number;
+  period: number;
 }
 
 /**
- * 授業実施日のリストから、指定曜日（0-6）の日数をカウント（重複は1回として扱う）
- * weekdays: 例 [1, 3] = 月・水 → 月曜と水曜の合計
+ * 曜日・時限のペアごとに、マスター上で「その曜日かつその時限が稼働」の日数を合算する（二次元マッチング）
+ * 例: スロットが [木1限, 木2限] → 木曜のうち1限=授業の日数 + 木曜のうち2限=授業の日数
+ */
+export function countClassSlotsWithDuplicates(
+  validDays: ValidSchoolDay[],
+  slots: ClassSlot[]
+): number {
+  let total = 0;
+  for (const slot of slots) {
+    const { weekday, period } = slot;
+    if (period < 1 || period > 6) continue;
+    for (const d of validDays) {
+      if (d.dayOfWeek === weekday && d.activePeriods.includes(period)) {
+        total += 1;
+      }
+    }
+  }
+  return total;
+}
+
+/**
+ * 授業実施日のリストから、指定曜日（0-6）の「日数」（その日に1限以上稼働がある日を1日としてカウント）
  */
 export function countClassDays(
   validDays: ValidSchoolDay[],
