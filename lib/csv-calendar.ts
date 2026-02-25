@@ -34,16 +34,22 @@ function parseWeekdayFromString(str: string): number | null {
 }
 
 /**
- * 「MM月 DD日」形式から Date を生成（ソート・今日比較用。年は現在年で補完）
- * 残り授業日数はこの Date と「今日の0時」を比較して今日以降をカウントする
+ * 「MM月 DD日」形式から Date を生成（ソート・比較用）。
+ * academicYear 指定時: 4〜12月＝対象年度、1〜3月＝対象年度+1（学校年度）。
+ * 未指定時: いずれも現在の西暦年（後方互換）。
  */
-function parseMonthDayForSort(str: string): Date | null {
+function parseMonthDayWithAcademicYear(str: string, academicYear?: number): Date | null {
   const match = String(str).trim().match(/(\d{1,2})月\s*(\d{1,2})日/);
   if (!match) return null;
-  const month = parseInt(match[1], 10) - 1;
+  const month1Based = parseInt(match[1], 10);
   const day = parseInt(match[2], 10);
-  const year = new Date().getFullYear();
-  const date = new Date(year, month, day);
+  const year =
+    academicYear != null
+      ? month1Based >= 4
+        ? academicYear
+        : academicYear + 1
+      : new Date().getFullYear();
+  const date = new Date(year, month1Based - 1, day);
   if (Number.isNaN(date.getTime())) return null;
   return date;
 }
@@ -64,10 +70,9 @@ function isHeaderRow(row: unknown): boolean {
 
 /**
  * CSVテキストを解析し、各日ごとに「稼働している時限」を保持するリストを返す
- * - A列で日付・曜日を取得。C列(1限)〜H列(6限)を独立にチェックし、「授業」の列を activePeriods に格納
- * - いずれかの時限が「授業」である行のみ結果に含める
+ * - academicYear を渡すと、A列の月に応じて西暦を付与（4〜12月＝対象年度、1〜3月＝対象年度+1）
  */
-export function parseScheduleCsv(csvText: string): ValidSchoolDay[] {
+export function parseScheduleCsv(csvText: string, academicYear?: number): ValidSchoolDay[] {
   const parsed = Papa.parse<string[]>(csvText, {
     skipEmptyLines: true,
   });
@@ -90,13 +95,13 @@ export function parseScheduleCsv(csvText: string): ValidSchoolDay[] {
 
     const activePeriods: number[] = [];
     for (let p = 1; p <= 6; p++) {
-      const colIndex = p + 1; // C=2(1限), D=3(2限), ..., H=7(6限)
+      const colIndex = p + 1;
       const cell = row[colIndex];
       if (isPeriodClass(cell)) activePeriods.push(p);
     }
     if (activePeriods.length === 0) continue;
 
-    const dateForSort = parseMonthDayForSort(dateRaw) ?? new Date(0);
+    const dateForSort = parseMonthDayWithAcademicYear(dateRaw, academicYear) ?? new Date(0);
     result.push({
       dateStr: dateRaw,
       dayOfWeek,
@@ -107,6 +112,14 @@ export function parseScheduleCsv(csvText: string): ValidSchoolDay[] {
 
   result.sort((a, b) => a.date.getTime() - b.date.getTime());
   return result;
+}
+
+/** 現在の学校年度（4月〜翌3月）。例: 2026年2月 → 2025 */
+export function getCurrentAcademicYear(): number {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = now.getMonth() + 1;
+  return m >= 4 ? y : y - 1;
 }
 
 /** 授業の1スロット = 曜日 + 時限のペア */
@@ -136,22 +149,28 @@ export function countClassSlotsWithDuplicates(
   return total;
 }
 
-/** 今日の0時0分（ローカル）。残り授業日数は「この日以降」の日程をカウントする */
-function getStartOfToday(): Date {
+/** 基準日文字列 YYYY-MM-DD をその日の0時0分（ローカル）の Date に。無効・未指定時は今日の0時 */
+function getReferenceDateStart(refDateStr: string | undefined): Date {
+  if (refDateStr && /^\d{4}-\d{2}-\d{2}$/.test(refDateStr.trim())) {
+    const [y, m, d] = refDateStr.split("-").map(Number);
+    const date = new Date(y, m - 1, d);
+    if (!Number.isNaN(date.getTime())) return date;
+  }
   const now = new Date();
   return new Date(now.getFullYear(), now.getMonth(), now.getDate());
 }
 
 /**
- * 「今日（new Date()）以降」の授業日数のみを、曜日・時限スロットに基づいてカウント（残り授業日数）
- * マスターCSVのA列は現在年で補完した Date と startOfToday で比較し、d.date >= startOfToday のものをカウント
+ * 「基準日」以降の授業日数のみを、曜日・時限スロットに基づいてカウント（残り授業日数）
+ * referenceDateStr: YYYY-MM-DD。未指定・無効時は今日を使用
  */
 export function countFutureClassSlots(
   validDays: ValidSchoolDay[],
-  slots: ClassSlot[]
+  slots: ClassSlot[],
+  referenceDateStr?: string
 ): number {
-  const startOfToday = getStartOfToday();
-  const futureDays = validDays.filter((d) => d.date >= startOfToday);
+  const refStart = getReferenceDateStart(referenceDateStr);
+  const futureDays = validDays.filter((d) => d.date >= refStart);
   let total = 0;
   for (const slot of slots) {
     const { weekday, period } = slot;

@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useCallback, useEffect, useRef } from "react";
-import { parseScheduleCsv, countClassSlotsWithDuplicates, countFutureClassSlots, type ValidSchoolDay, type ClassSlot } from "@/lib/csv-calendar";
+import { parseScheduleCsv, countClassSlotsWithDuplicates, countFutureClassSlots, getCurrentAcademicYear, type ValidSchoolDay, type ClassSlot } from "@/lib/csv-calendar";
 import { parseClassesCsv } from "@/lib/classes-csv";
 import { getRemainingDaysStatus, getRemainingDaysColors } from "@/lib/class-gauge-status";
 import { ClassHoursAdjustModal } from "./ClassHoursAdjustModal";
@@ -57,6 +57,15 @@ interface ClassWithResult extends RegisteredClass {
   faceToFaceDays: number;
 }
 
+/** 今日の日付を YYYY-MM-DD で返す */
+function formatToday(): string {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 function generateId(): string {
   return Math.random().toString(36).slice(2, 12);
 }
@@ -96,6 +105,11 @@ export function ClassHoursFromCsv({
   const [csvFile, setCsvFile] = useState<File | null>(null);
   const [validDays, setValidDays] = useState<ValidSchoolDay[]>([]);
   const [parseError, setParseError] = useState<string | null>(null);
+  /** 対象年度（学校年度）。4月〜翌3月。例: 2026年2月 → 2025 */
+  const [academicYear, setAcademicYear] = useState<number>(() => getCurrentAcademicYear());
+  /** 基準日（残り授業日数の「この日以降」に使う）。YYYY-MM-DD。未入力時は今日で計算 */
+  const [referenceDate, setReferenceDate] = useState<string>(() => formatToday());
+  const lastCsvTextRef = useRef<string | null>(null);
 
   const [className, setClassName] = useState("");
   const [initialAttendance, setInitialAttendance] = useState<number>(0);
@@ -132,13 +146,15 @@ export function ClassHoursFromCsv({
       setParseError(null);
       setValidDays([]);
       setCsvFile(file ?? null);
+      lastCsvTextRef.current = null;
       if (!file) return;
 
       const reader = new FileReader();
       reader.onload = () => {
         const text = String(reader.result ?? "");
         try {
-          const days = parseScheduleCsv(text);
+          lastCsvTextRef.current = text;
+          const days = parseScheduleCsv(text, academicYear);
           setValidDays(days);
           if (days.length === 0) setParseError("授業実施日（C〜H列のいずれかに「授業」が入力された行）がありませんでした。");
         } catch (err) {
@@ -147,7 +163,7 @@ export function ClassHoursFromCsv({
       };
       reader.readAsText(file, "UTF-8");
     },
-    []
+    [academicYear]
   );
 
   const setWeekdayAt = (index: number, value: number | null) => {
@@ -296,6 +312,19 @@ export function ClassHoursFromCsv({
     if (validDays.length > 0 && classes.length > 0) runCount();
   }, [classes.length, validDays.length, runCount]);
 
+  // 対象年度変更時にCSVを再パース（同じテキストで年度だけ変える）
+  useEffect(() => {
+    if (lastCsvTextRef.current != null) {
+      try {
+        const days = parseScheduleCsv(lastCsvTextRef.current, academicYear);
+        setValidDays(days);
+        setParseError(null);
+      } catch {
+        // パース失敗は無視（既に表示中の validDays を維持）
+      }
+    }
+  }, [academicYear]);
+
   const hasResults = results.length > 0;
   const displayList = hasResults
     ? results
@@ -315,6 +344,44 @@ export function ClassHoursFromCsv({
       <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
         年間行事予定CSV（A列=日付、B列=内容、C〜H列=1限〜6限）を読み込み、各時限列に「授業」が入力されている時限を稼働として、各授業の総時数・必要出席日数を算出します。
       </p>
+
+      {/* 対象年度・基準日 */}
+      <div className="mt-6 rounded-xl border border-zinc-200 bg-zinc-50/50 p-4 dark:border-zinc-700 dark:bg-zinc-800/30">
+        <h3 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
+          対象年度・基準日
+        </h3>
+        <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
+          残り授業日数は「基準日」以降の日程でカウントします。日付は学校年度（4月〜翌3月）に合わせて解釈されます。
+        </p>
+        <div className="mt-3 flex flex-wrap items-end gap-4">
+          <div>
+            <label className="block text-xs font-medium text-zinc-500 dark:text-zinc-400">対象年度</label>
+            <input
+              type="number"
+              min={2000}
+              max={2100}
+              value={academicYear}
+              onChange={(e) => {
+                const v = parseInt(e.target.value, 10);
+                if (!Number.isNaN(v)) setAcademicYear(v);
+              }}
+              className="mt-1 w-24 rounded border border-zinc-300 bg-white px-3 py-2 text-sm tabular-nums dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
+              aria-label="対象年度（学校年度）"
+            />
+            <span className="ml-1 text-xs text-zinc-500">年度（4月〜翌3月）</span>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-zinc-500 dark:text-zinc-400">基準日</label>
+            <input
+              type="date"
+              value={referenceDate}
+              onChange={(e) => setReferenceDate(e.target.value)}
+              className="mt-1 rounded border border-zinc-300 bg-white px-3 py-2 text-sm tabular-nums dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
+              aria-label="基準日（残り授業はこの日以降をカウント）"
+            />
+          </div>
+        </div>
+      </div>
 
       {showToggleBlock && (
         <div className="mt-6 flex flex-wrap items-center gap-3 rounded-xl border-2 border-sky-200 bg-sky-50/80 px-4 py-3 dark:border-sky-800 dark:bg-sky-950/30">
@@ -517,7 +584,7 @@ export function ClassHoursFromCsv({
                   const required = row.requiredAttendance ?? 0;
                   const remaining = required > 0 ? required - currentAtt : 0;
                   const slots = toSlots(row.weekdays, row.periods ?? [null, null, null, null]);
-                  const remainingClassDays = hasResults && validDays.length > 0 ? countFutureClassSlots(validDays, slots) : 0;
+                  const remainingClassDays = hasResults && validDays.length > 0 ? countFutureClassSlots(validDays, slots, referenceDate.trim() || undefined) : 0;
                   const supplementaryNeeded = Math.max(0, remaining - remainingClassDays);
                   const status = getRemainingDaysStatus(remaining);
                   const colors = getRemainingDaysColors(status);
