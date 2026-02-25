@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef } from "react";
-import { parseScheduleCsv, countClassSlotsWithDuplicates, type ValidSchoolDay, type ClassSlot } from "@/lib/csv-calendar";
+import React, { useState, useCallback, useEffect, useRef } from "react";
+import { parseScheduleCsv, countClassSlotsWithDuplicates, countFutureClassSlots, type ValidSchoolDay, type ClassSlot } from "@/lib/csv-calendar";
 import { parseClassesCsv } from "@/lib/classes-csv";
 import { getRemainingDaysStatus, getRemainingDaysColors } from "@/lib/class-gauge-status";
 import { ClassHoursAdjustModal } from "./ClassHoursAdjustModal";
@@ -120,6 +120,9 @@ export function ClassHoursFromCsv({
   const [adjustments, setAdjustments] = useState<Record<string, { add: number; subtract: number }>>({});
   const [currentAttendances, setCurrentAttendances] = useState<Record<string, number>>({});
   const [editingClassId, setEditingClassId] = useState<string | null>(null);
+  const [expandedRowId, setExpandedRowId] = useState<string | null>(null);
+  /** 補修実施日（classId -> 日付文字列 YYYY-MM-DD の配列） */
+  const [supplementaryDatesByClass, setSupplementaryDatesByClass] = useState<Record<string, string[]>>({});
 
   const handleFileChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -186,6 +189,12 @@ export function ClassHoursFromCsv({
       return next;
     });
     setCurrentAttendances((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    setExpandedRowId((prev) => (prev === id ? null : prev));
+    setSupplementaryDatesByClass((prev) => {
       const next = { ...prev };
       delete next[id];
       return next;
@@ -479,6 +488,12 @@ export function ClassHoursFromCsv({
                   <th className="py-2 pr-2 text-right font-medium text-zinc-600 dark:text-zinc-400">
                     対面授業
                   </th>
+                  <th className="py-2 pr-2 text-right font-medium text-zinc-600 dark:text-zinc-400">
+                    残り授業日数
+                  </th>
+                  <th className="py-2 pr-2 text-right font-medium text-zinc-600 dark:text-zinc-400">
+                    補修が必要な日数
+                  </th>
                   <th className="py-2 pr-2 font-medium text-zinc-600 dark:text-zinc-400">
                     条件達成までの日数
                   </th>
@@ -494,17 +509,46 @@ export function ClassHoursFromCsv({
                   const currentAtt = currentAttendances[row.id] ?? 0;
                   const required = row.requiredAttendance ?? 0;
                   const remaining = required > 0 ? required - currentAtt : 0;
+                  const slots = toSlots(row.weekdays, row.periods ?? [null, null, null, null]);
+                  const remainingClassDays = hasResults && validDays.length > 0 ? countFutureClassSlots(validDays, slots) : 0;
+                  const supplementaryNeeded = Math.max(0, remaining - remainingClassDays);
                   const status = getRemainingDaysStatus(remaining);
                   const colors = getRemainingDaysColors(status);
                   const gaugePercent = required > 0 ? Math.min(100, Math.round((100 * currentAtt) / required)) : 0;
                   const faceToFace = row.faceToFaceDays ?? 0;
+                  const isExpanded = expandedRowId === row.id;
+                  const supplementaryDates = supplementaryDatesByClass[row.id] ?? [];
+                  const numInputs = Math.max(0, remaining);
+                  const setSupplementaryDateAt = (index: number, value: string) => {
+                    setSupplementaryDatesByClass((prev) => {
+                      const arr = prev[row.id] ?? [];
+                      const next = [...arr];
+                      while (next.length <= index) next.push("");
+                      next[index] = value;
+                      return { ...prev, [row.id]: next };
+                    });
+                  };
                   return (
-                    <tr
-                      key={row.id}
-                      className="border-b border-zinc-100 dark:border-zinc-800"
-                    >
+                    <React.Fragment key={row.id}>
+                      <tr
+                        key={row.id}
+                        onClick={() => setExpandedRowId((prev) => (prev === row.id ? null : row.id))}
+                        className="cursor-pointer border-b border-zinc-100 transition-colors hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-800/50"
+                        role="button"
+                        tabIndex={0}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            setExpandedRowId((prev) => (prev === row.id ? null : row.id));
+                          }
+                        }}
+                        aria-expanded={isExpanded}
+                      >
                       <td className="py-2.5 pr-2 font-medium text-zinc-900 dark:text-zinc-100">
-                        {row.name}
+                        <span className="inline-flex items-center gap-1.5">
+                          <span className={`inline-block transition-transform ${isExpanded ? "rotate-90" : ""}`} aria-hidden>▶</span>
+                          {row.name}
+                        </span>
                       </td>
                       <td className="py-2.5 pr-2 text-zinc-600 dark:text-zinc-400">
                         {slotsDisplay(row.weekdays, row.periods ?? [null, null, null, null])}
@@ -536,7 +580,7 @@ export function ClassHoursFromCsv({
                         )}
                       </td>
                       <td className="py-2.5 pr-2 text-right tabular-nums text-zinc-900 dark:text-zinc-100">
-                        <div className="flex items-center justify-end gap-1">
+                        <div className="flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
                           <button
                             type="button"
                             onClick={() => setCurrentAttendances((prev) => ({ ...prev, [row.id]: Math.max(0, (prev[row.id] ?? 0) - 1) }))}
@@ -561,6 +605,22 @@ export function ClassHoursFromCsv({
                       <td className="py-2.5 pr-2 text-right tabular-nums text-zinc-700 dark:text-zinc-300">
                         対面授業: {faceToFace}日
                       </td>
+                      <td className="py-2.5 pr-2 text-right tabular-nums text-zinc-700 dark:text-zinc-300">
+                        {hasResults ? `${remainingClassDays}日` : "—"}
+                      </td>
+                      <td className="py-2.5 pr-2 text-right">
+                        {hasResults ? (
+                          supplementaryNeeded <= 0 ? (
+                            <span className="tabular-nums text-blue-600 dark:text-blue-400">0日</span>
+                          ) : (
+                            <span className="font-bold tabular-nums text-red-600 dark:text-red-400">
+                              補修が必要な日数: {supplementaryNeeded}日
+                            </span>
+                          )
+                        ) : (
+                          "—"
+                        )}
+                      </td>
                       <td className="py-2.5 pr-2">
                         {hasResults && (
                           <div className="flex min-w-[90px] items-center gap-2">
@@ -577,7 +637,7 @@ export function ClassHoursFromCsv({
                         )}
                       </td>
                       <td className="py-2.5">
-                        <div className="flex items-center justify-center gap-1">
+                        <div className="flex items-center justify-center gap-1" onClick={(e) => e.stopPropagation()}>
                           <button
                             type="button"
                             onClick={() => setEditingClassId(row.id)}
@@ -596,6 +656,40 @@ export function ClassHoursFromCsv({
                         </div>
                       </td>
                     </tr>
+                    {isExpanded && (
+                      <tr key={`${row.id}-detail`} className="border-b border-zinc-100 bg-zinc-50/50 dark:border-zinc-800 dark:bg-zinc-800/30">
+                        <td colSpan={10} className="px-4 py-4">
+                          <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-700 dark:bg-zinc-900">
+                            {remaining <= 0 ? (
+                              <p className="text-center text-base font-medium text-emerald-600 dark:text-emerald-400">
+                                🎉 条件達成済み（補修不要）
+                              </p>
+                            ) : (
+                              <div className="space-y-3">
+                                <p className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
+                                  補修実施日を入力（{numInputs}日分）
+                                </p>
+                                <div className="flex flex-wrap gap-3">
+                                  {Array.from({ length: numInputs }, (_, i) => (
+                                    <label key={i} className="flex flex-col gap-1">
+                                      <span className="text-xs text-zinc-500">補修{i + 1}</span>
+                                      <input
+                                        type="date"
+                                        value={supplementaryDates[i] ?? ""}
+                                        onChange={(e) => setSupplementaryDateAt(i, e.target.value)}
+                                        onClick={(e) => e.stopPropagation()}
+                                        className="rounded border border-zinc-300 bg-white px-3 py-2 text-sm tabular-nums dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
+                                      />
+                                    </label>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                    </React.Fragment>
                   );
                 })}
               </tbody>

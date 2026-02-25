@@ -135,6 +135,34 @@ export function countClassSlotsWithDuplicates(
   return total;
 }
 
+/** 今日の0時0分（ローカル） */
+function getStartOfToday(): Date {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate());
+}
+
+/**
+ * 「今日より未来」の授業日数のみを、曜日・時限スロットに基づいてカウント（残り授業日数）
+ */
+export function countFutureClassSlots(
+  validDays: ValidSchoolDay[],
+  slots: ClassSlot[]
+): number {
+  const startOfToday = getStartOfToday();
+  const futureDays = validDays.filter((d) => d.date >= startOfToday);
+  let total = 0;
+  for (const slot of slots) {
+    const { weekday, period } = slot;
+    if (period < 1 || period > 6) continue;
+    for (const d of futureDays) {
+      if (d.dayOfWeek === weekday && d.activePeriods.includes(period)) {
+        total += 1;
+      }
+    }
+  }
+  return total;
+}
+
 /**
  * 授業実施日のリストから、指定曜日（0-6）の「日数」（その日に1限以上稼働がある日を1日としてカウント）
  */
