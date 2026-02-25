@@ -121,8 +121,8 @@ export function ClassHoursFromCsv({
   const [currentAttendances, setCurrentAttendances] = useState<Record<string, number>>({});
   const [editingClassId, setEditingClassId] = useState<string | null>(null);
   const [expandedRowId, setExpandedRowId] = useState<string | null>(null);
-  /** 補修実施日（classId -> 日付文字列 YYYY-MM-DD の配列） */
-  const [supplementaryDatesByClass, setSupplementaryDatesByClass] = useState<Record<string, string[]>>({});
+  /** 補修実施（classId -> { date, content }[]） */
+  const [supplementaryByClass, setSupplementaryByClass] = useState<Record<string, { date: string; content: string }[]>>({});
 
   const handleFileChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -194,7 +194,7 @@ export function ClassHoursFromCsv({
       return next;
     });
     setExpandedRowId((prev) => (prev === id ? null : prev));
-    setSupplementaryDatesByClass((prev) => {
+    setSupplementaryByClass((prev) => {
       const next = { ...prev };
       delete next[id];
       return next;
@@ -517,14 +517,14 @@ export function ClassHoursFromCsv({
                   const gaugePercent = required > 0 ? Math.min(100, Math.round((100 * currentAtt) / required)) : 0;
                   const faceToFace = row.faceToFaceDays ?? 0;
                   const isExpanded = expandedRowId === row.id;
-                  const supplementaryDates = supplementaryDatesByClass[row.id] ?? [];
+                  const supplementaryList = supplementaryByClass[row.id] ?? [];
                   const numInputs = Math.max(0, remaining);
-                  const setSupplementaryDateAt = (index: number, value: string) => {
-                    setSupplementaryDatesByClass((prev) => {
+                  const setSupplementaryAt = (index: number, patch: { date?: string; content?: string }) => {
+                    setSupplementaryByClass((prev) => {
                       const arr = prev[row.id] ?? [];
-                      const next = [...arr];
-                      while (next.length <= index) next.push("");
-                      next[index] = value;
+                      const next = arr.slice();
+                      while (next.length <= index) next.push({ date: "", content: "" });
+                      next[index] = { ...(next[index] ?? { date: "", content: "" }), ...patch };
                       return { ...prev, [row.id]: next };
                     });
                   };
@@ -667,21 +667,38 @@ export function ClassHoursFromCsv({
                             ) : (
                               <div className="space-y-3">
                                 <p className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
-                                  補修実施日を入力（{numInputs}日分）
+                                  補修実施日と実施内容を入力（{numInputs}日分）
                                 </p>
-                                <div className="flex flex-wrap gap-3">
-                                  {Array.from({ length: numInputs }, (_, i) => (
-                                    <label key={i} className="flex flex-col gap-1">
-                                      <span className="text-xs text-zinc-500">補修{i + 1}</span>
-                                      <input
-                                        type="date"
-                                        value={supplementaryDates[i] ?? ""}
-                                        onChange={(e) => setSupplementaryDateAt(i, e.target.value)}
+                                <div className="space-y-3">
+                                  {Array.from({ length: numInputs }, (_, i) => {
+                                    const item = supplementaryList[i] ?? { date: "", content: "" };
+                                    return (
+                                      <div
+                                        key={i}
+                                        className="flex flex-wrap items-center gap-3 rounded-lg border border-zinc-200 bg-zinc-50/50 px-3 py-2 dark:border-zinc-700 dark:bg-zinc-800/30"
                                         onClick={(e) => e.stopPropagation()}
-                                        className="rounded border border-zinc-300 bg-white px-3 py-2 text-sm tabular-nums dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
-                                      />
-                                    </label>
-                                  ))}
+                                      >
+                                        <span className="w-14 shrink-0 text-xs font-medium text-zinc-500 dark:text-zinc-400">
+                                          補修{i + 1}
+                                        </span>
+                                        <input
+                                          type="date"
+                                          value={item.date}
+                                          onChange={(e) => setSupplementaryAt(i, { date: e.target.value })}
+                                          className="rounded border border-zinc-300 bg-white px-3 py-2 text-sm tabular-nums dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
+                                          aria-label={`補修${i + 1} 日付`}
+                                        />
+                                        <input
+                                          type="text"
+                                          value={item.content}
+                                          onChange={(e) => setSupplementaryAt(i, { content: e.target.value })}
+                                          placeholder="実施内容（例: プリント課題）"
+                                          className="min-w-[200px] flex-1 rounded border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder-zinc-500"
+                                          aria-label={`補修${i + 1} 実施内容`}
+                                        />
+                                      </div>
+                                    );
+                                  })}
                                 </div>
                               </div>
                             )}

@@ -34,7 +34,8 @@ function parseWeekdayFromString(str: string): number | null {
 }
 
 /**
- * 「MM月 DD日」形式から Date を生成（ソート用。年は現在年を使用）
+ * 「MM月 DD日」形式から Date を生成（ソート・今日比較用。年は現在年で補完）
+ * 残り授業日数はこの Date と「今日の0時」を比較して今日以降をカウントする
  */
 function parseMonthDayForSort(str: string): Date | null {
   const match = String(str).trim().match(/(\d{1,2})月\s*(\d{1,2})日/);
@@ -135,14 +136,15 @@ export function countClassSlotsWithDuplicates(
   return total;
 }
 
-/** 今日の0時0分（ローカル） */
+/** 今日の0時0分（ローカル）。残り授業日数は「この日以降」の日程をカウントする */
 function getStartOfToday(): Date {
   const now = new Date();
   return new Date(now.getFullYear(), now.getMonth(), now.getDate());
 }
 
 /**
- * 「今日より未来」の授業日数のみを、曜日・時限スロットに基づいてカウント（残り授業日数）
+ * 「今日（new Date()）以降」の授業日数のみを、曜日・時限スロットに基づいてカウント（残り授業日数）
+ * マスターCSVのA列は現在年で補完した Date と startOfToday で比較し、d.date >= startOfToday のものをカウント
  */
 export function countFutureClassSlots(
   validDays: ValidSchoolDay[],
