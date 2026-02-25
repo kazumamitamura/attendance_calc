@@ -37,6 +37,10 @@ export interface RegisteredClass {
 interface ClassWithResult extends RegisteredClass {
   totalHours: number;
   requiredAttendance: number;
+  /** この授業で特別な配慮(1/2)がONか */
+  isSpecialCare: boolean;
+  /** 対面授業として必要な日数（1/2 ON時のみ > 0） */
+  faceToFaceDays: number;
 }
 
 function generateId(): string {
@@ -77,7 +81,13 @@ export function ClassHoursFromCsv({
   const showToggleBlock = onSpecialConsiderationChange == null;
   const [adjustments, setAdjustments] = useState<Record<string, { add: number; subtract: number }>>({});
   const [currentAttendances, setCurrentAttendances] = useState<Record<string, number>>({});
+  const [specialCareByClass, setSpecialCareByClass] = useState<Record<string, boolean>>({});
   const [editingClassId, setEditingClassId] = useState<string | null>(null);
+
+  const isSpecialCareFor = (id: string): boolean => specialCareByClass[id] ?? false;
+  const setSpecialCareFor = (id: string, value: boolean) => {
+    setSpecialCareByClass((prev) => ({ ...prev, [id]: value }));
+  };
 
   const handleFileChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -139,6 +149,11 @@ export function ClassHoursFromCsv({
       delete next[id];
       return next;
     });
+    setSpecialCareByClass((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
     if (editingClassId === id) setEditingClassId(null);
   };
 
@@ -183,16 +198,26 @@ export function ClassHoursFromCsv({
 
   const runCount = useCallback(() => {
     if (validDays.length === 0 || classes.length === 0) return;
-    const ratio = specialConsideration ? 1 / 2 : 2 / 3;
     const next: ClassWithResult[] = classes.map((c) => {
       const baseHours = countClassDaysWithDuplicates(validDays, c.weekdays);
       const adj = adjustments[c.id] ?? { add: 0, subtract: 0 };
       const totalHours = Math.max(0, baseHours + adj.add - adj.subtract);
+      const isSpecialCare = specialCareByClass[c.id] ?? false;
+      const ratio = isSpecialCare ? 1 / 2 : 2 / 3;
       const requiredAttendance = Math.ceil(totalHours * ratio);
-      return { ...c, totalHours, requiredAttendance };
+      const requiredAtTwoThirds = Math.ceil(totalHours * (2 / 3));
+      const requiredAtHalf = Math.ceil(totalHours * (1 / 2));
+      const faceToFaceDays = isSpecialCare ? Math.max(0, requiredAtTwoThirds - requiredAtHalf) : 0;
+      return {
+        ...c,
+        totalHours,
+        requiredAttendance,
+        isSpecialCare,
+        faceToFaceDays,
+      };
     });
     setResults(next);
-  }, [validDays, classes, specialConsideration, adjustments]);
+  }, [validDays, classes, specialCareByClass, adjustments]);
 
   const handleCount = () => runCount();
 
@@ -212,13 +237,26 @@ export function ClassHoursFromCsv({
     if (results.length > 0) runCount();
   }, [adjustments, runCount]);
 
+  // 授業ごとの特別な配慮トグル変更時に再計算
+  useEffect(() => {
+    if (results.length > 0) runCount();
+  }, [specialCareByClass, runCount]);
+
   // 授業が追加されたとき（一括含む）にカウント実行
   useEffect(() => {
     if (validDays.length > 0 && classes.length > 0) runCount();
   }, [classes.length, validDays.length, runCount]);
 
   const hasResults = results.length > 0;
-  const displayList = hasResults ? results : classes.map((c) => ({ ...c, totalHours: 0, requiredAttendance: 0 }));
+  const displayList = hasResults
+    ? results
+    : classes.map((c) => ({
+        ...c,
+        totalHours: 0,
+        requiredAttendance: 0,
+        isSpecialCare: specialCareByClass[c.id] ?? false,
+        faceToFaceDays: 0,
+      }));
 
   return (
     <section className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
@@ -372,7 +410,7 @@ export function ClassHoursFromCsv({
           </div>
 
           <div className="mt-3 overflow-x-auto">
-            <table className="w-full min-w-[640px] border-collapse text-sm">
+            <table className="w-full min-w-[800px] border-collapse text-sm">
               <thead>
                 <tr className="border-b border-zinc-200 dark:border-zinc-700">
                   <th className="py-2 pr-2 text-left font-medium text-zinc-600 dark:text-zinc-400">
@@ -385,7 +423,16 @@ export function ClassHoursFromCsv({
                     総授業時数
                   </th>
                   <th className="py-2 pr-2 text-right font-medium text-zinc-600 dark:text-zinc-400">
-                    必要出席日数（{specialConsideration ? "1/2" : "2/3"}）
+                    必要出席
+                  </th>
+                  <th className="py-2 pr-2 text-right font-medium text-zinc-600 dark:text-zinc-400">
+                    出席実績
+                  </th>
+                  <th className="py-2 pr-2 text-center font-medium text-zinc-600 dark:text-zinc-400">
+                    1/2対応
+                  </th>
+                  <th className="py-2 pr-2 text-right font-medium text-zinc-600 dark:text-zinc-400">
+                    対面授業
                   </th>
                   <th className="py-2 pr-2 font-medium text-zinc-600 dark:text-zinc-400">
                     進捗
@@ -400,11 +447,13 @@ export function ClassHoursFromCsv({
                   const adj = adjustments[row.id] ?? { add: 0, subtract: 0 };
                   const hasAdj = adj.add > 0 || adj.subtract > 0;
                   const currentAtt = currentAttendances[row.id] ?? 0;
-                  const required = row.requiredAttendance;
+                  const required = row.requiredAttendance ?? 0;
                   const remaining = required > 0 ? required - currentAtt : 0;
                   const status = getRemainingDaysStatus(remaining);
                   const colors = getRemainingDaysColors(status);
                   const gaugePercent = required > 0 ? Math.min(100, Math.round((100 * currentAtt) / required)) : 0;
+                  const isSpecial = row.isSpecialCare ?? false;
+                  const faceToFace = row.faceToFaceDays ?? 0;
                   return (
                     <tr
                       key={row.id}
@@ -433,11 +482,45 @@ export function ClassHoursFromCsv({
                         )}
                       </td>
                       <td className="py-2.5 pr-2 text-right tabular-nums text-zinc-900 dark:text-zinc-100">
-                        {hasResults ? row.requiredAttendance : "—"}
+                        {hasResults ? (
+                          <span>
+                            {row.requiredAttendance}
+                            <span className="ml-0.5 text-xs text-zinc-500">({isSpecial ? "1/2" : "2/3"})</span>
+                          </span>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                      <td className="py-2.5 pr-2 text-right tabular-nums text-zinc-900 dark:text-zinc-100">
+                        <span className="font-medium">授業出席日数: {currentAtt}日</span>
+                      </td>
+                      <td className="py-2.5 pr-2">
+                        <div className="flex justify-center">
+                          <button
+                            type="button"
+                            role="switch"
+                            aria-checked={isSpecial}
+                            onClick={() => setSpecialCareFor(row.id, !isSpecial)}
+                            className={`relative inline-flex h-5 w-9 shrink-0 rounded-full border transition-colors focus:outline-none focus:ring-2 focus:ring-sky-400 focus:ring-offset-1 ${
+                              isSpecial
+                                ? "border-sky-500 bg-sky-500"
+                                : "border-zinc-300 bg-zinc-200 dark:border-zinc-600 dark:bg-zinc-700"
+                            }`}
+                          >
+                            <span
+                              className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow transition ${
+                                isSpecial ? "translate-x-4" : "translate-x-0.5"
+                              }`}
+                            />
+                          </button>
+                        </div>
+                      </td>
+                      <td className="py-2.5 pr-2 text-right tabular-nums text-zinc-700 dark:text-zinc-300">
+                        対面授業: {faceToFace}日
                       </td>
                       <td className="py-2.5 pr-2">
                         {hasResults && (
-                          <div className="flex min-w-[100px] items-center gap-2">
+                          <div className="flex min-w-[90px] items-center gap-2">
                             <div className="h-2 flex-1 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-700">
                               <div
                                 className={`h-full rounded-full transition-all ${colors.bar}`}
