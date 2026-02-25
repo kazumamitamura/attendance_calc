@@ -1,6 +1,7 @@
 /**
  * 年間行事予定CSVの読み込みと解析
- * A列: 日付（例: 04月 01日(火) または YYYY-MM-DD）, B列: 内容。B列が空白の日のみ「授業実施日」とする。
+ * A列: 日付（例: 04月 01日(火) または YYYY-MM-DD）, B列: 内容, C列: 授業時数など。
+ * C列が空白（空文字）の行のみ「授業実施日（有効日）」としてカウントする。
  */
 
 import Papa from "papaparse";
@@ -45,10 +46,10 @@ function parseMonthDayForSort(str: string): Date | null {
 }
 
 /**
- * B列（内容）が空白かどうか
- * 半角・全角スペースのみのセルも空白とみなす
+ * C列（授業時数など）が空白かどうか
+ * 未定義・null・空文字・半角・全角スペースのみのセルも空白とみなす
  */
-function isContentEmpty(value: unknown): boolean {
+function isColumnCEmpty(value: unknown): boolean {
   const s = String(value ?? "").trim();
   const normalized = s.replace(/\s/g, "").replace(/\u3000/g, "");
   return normalized === "";
@@ -57,43 +58,45 @@ function isContentEmpty(value: unknown): boolean {
 /**
  * 行がヘッダー行かどうか（1行目で「日付」「内容」などのキーワードを含むが曜日括弧を含まない）
  */
-function isHeaderRow(row: unknown[]): boolean {
-  const a = String((row as string[])[0] ?? "").trim();
+function isHeaderRow(row: unknown): boolean {
+  const first = Array.isArray(row) ? (row as string[])[0] : undefined;
+  const a = String(first ?? "").trim();
   return /日付|内容|date|content/i.test(a) && !/\([月火水木金土日]\)/.test(a);
 }
 
 /**
- * CSVテキストを解析し、授業実施日（B列が空白の日）のみ抽出する
+ * CSVテキストを解析し、授業実施日（C列が空白の日）のみ抽出する
  * - 曜日は A列の (月)〜(日) を直接抽出（Date は使わない）
- * - B列は trim のうえ半角・全角スペースのみも空白とみなす
- * - 1行目がヘッダーの場合はスキップ（インデックスで安全に取得）
+ * - C列（3列目）は trim のうえ空白の行のみ有効日。C列がない行も空白とみなす
+ * - 1行目がヘッダーの場合はスキップ。末尾の空行・列不足行は安全にスキップ
  */
 export function parseScheduleCsv(csvText: string): ValidSchoolDay[] {
   const parsed = Papa.parse<string[]>(csvText, {
     skipEmptyLines: true,
   });
 
-  const rows = (parsed.data ?? []) as string[][];
-  const dataRows = rows.length > 0 && isHeaderRow(rows[0]) ? rows.slice(1) : rows;
+  const rows: string[][] = Array.isArray(parsed.data) ? (parsed.data as string[][]) : [];
+  const dataRows =
+    rows.length > 0 && isHeaderRow(rows[0]) ? rows.slice(1) : rows;
 
   const result: ValidSchoolDay[] = [];
 
   for (let i = 0; i < dataRows.length; i++) {
     const row = dataRows[i];
-    const dateRaw = String(row?.[0] ?? "").trim();
-    const content = String(row?.[1] ?? "").trim();
+    if (!row || !Array.isArray(row)) continue;
+
+    const dateRaw = String(row[0] ?? "").trim();
+    const columnC = row[2]; // C列（0=A, 1=B, 2=C）
 
     if (!dateRaw) continue;
-    if (!isContentEmpty(content)) continue;
+    if (!isColumnCEmpty(columnC)) continue;
 
     const dayOfWeek = parseWeekdayFromString(dateRaw);
     if (dayOfWeek === null) continue;
 
     const dateForSort = parseMonthDayForSort(dateRaw) ?? new Date(0);
-    const dateStr = dateRaw;
-
     result.push({
-      dateStr,
+      dateStr: dateRaw,
       dayOfWeek,
       date: dateForSort,
     });
@@ -105,8 +108,8 @@ export function parseScheduleCsv(csvText: string): ValidSchoolDay[] {
 
 /**
  * 授業実施日のリストから、選択された曜日配列（重複あり）に従い総授業時数をカウント。
- * 各曜日について「CSV内でその曜日が有効日としてカウントされた日数」を足し合わせる。
- * 例: CSVで月=10日・金=20日、授業の曜日が [月, 月, 金, 金] の場合 → 10+10+20+20 = 60
+ * 選択された配列の要素ごとに該当曜日のカウント数を取得し、単純に全て足し合わせる（完全加算）。
+ * 例: 木=25日・火=50日、授業の曜日が [木, 木, 火] → 25+25+50 = 100日
  */
 export function countClassDaysWithDuplicates(
   validDays: ValidSchoolDay[],
