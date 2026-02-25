@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useEffect, useRef } from "react";
 import { parseScheduleCsv, countClassDays, type ValidSchoolDay } from "@/lib/csv-calendar";
+import { ClassHoursAdjustModal } from "./ClassHoursAdjustModal";
 
 /** 曜日 0=日..6=土、null=なし */
 const WEEKDAY_OPTIONS: { value: number | null; label: string }[] = [
@@ -62,6 +63,8 @@ export function ClassHoursFromCsv() {
   const [classes, setClasses] = useState<RegisteredClass[]>([]);
   const [results, setResults] = useState<ClassWithResult[]>([]);
   const [specialConsideration, setSpecialConsideration] = useState(false);
+  const [adjustments, setAdjustments] = useState<Record<string, { add: number; subtract: number }>>({});
+  const [editingClassId, setEditingClassId] = useState<string | null>(null);
 
   const handleFileChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -110,6 +113,17 @@ export function ClassHoursFromCsv() {
   const handleRemoveClass = (id: string) => {
     setClasses((prev) => prev.filter((c) => c.id !== id));
     setResults((prev) => prev.filter((r) => r.id !== id));
+    setAdjustments((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    if (editingClassId === id) setEditingClassId(null);
+  };
+
+  const handleSaveAdjustment = (id: string, add: number, subtract: number) => {
+    setAdjustments((prev) => ({ ...prev, [id]: { add, subtract } }));
+    setEditingClassId(null);
   };
 
   const runCount = useCallback(() => {
@@ -117,12 +131,14 @@ export function ClassHoursFromCsv() {
     const ratio = specialConsideration ? 1 / 2 : 2 / 3;
     const next: ClassWithResult[] = classes.map((c) => {
       const weekdaysToCount = c.weekdays.filter((w): w is number => w !== null);
-      const totalHours = countClassDays(validDays, weekdaysToCount);
+      const baseHours = countClassDays(validDays, weekdaysToCount);
+      const adj = adjustments[c.id] ?? { add: 0, subtract: 0 };
+      const totalHours = Math.max(0, baseHours + adj.add - adj.subtract);
       const requiredAttendance = Math.ceil(totalHours * ratio);
       return { ...c, totalHours, requiredAttendance };
     });
     setResults(next);
-  }, [validDays, classes, specialConsideration]);
+  }, [validDays, classes, specialConsideration, adjustments]);
 
   const handleCount = () => runCount();
 
@@ -137,6 +153,11 @@ export function ClassHoursFromCsv() {
     }
   }, [specialConsideration, results.length, runCount]);
 
+  // 時数増減の保存後に再計算（リストと必要出席日数を即時更新）
+  useEffect(() => {
+    if (results.length > 0) runCount();
+  }, [adjustments, runCount]);
+
   const hasResults = results.length > 0;
   const displayList = hasResults ? results : classes.map((c) => ({ ...c, totalHours: 0, requiredAttendance: 0 }));
 
@@ -148,6 +169,33 @@ export function ClassHoursFromCsv() {
       <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
         年間行事予定CSV（A列=日付、B列=内容）を読み込み、B列が空白の日を授業実施日として各授業の総時数・必要出席日数を算出します。
       </p>
+
+      {/* 2分の1対応（特別な配慮）— 目立つ位置 */}
+      <div className="mt-6 flex flex-wrap items-center gap-3 rounded-xl border-2 border-amber-200 bg-amber-50/80 px-4 py-3 dark:border-amber-800 dark:bg-amber-950/30">
+        <span className="text-sm font-semibold text-zinc-800 dark:text-zinc-200">
+          特別な配慮が必要な生徒（2分の1対応）
+        </span>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={specialConsideration}
+          onClick={() => setSpecialConsideration((v) => !v)}
+          className={`relative inline-flex h-7 w-12 shrink-0 rounded-full border-2 transition-colors focus:outline-none focus:ring-2 focus:ring-amber-400 ${
+            specialConsideration
+              ? "border-amber-500 bg-amber-500"
+              : "border-zinc-300 bg-zinc-200 dark:border-zinc-600 dark:bg-zinc-700"
+          }`}
+        >
+          <span
+            className={`pointer-events-none inline-block h-6 w-6 transform rounded-full bg-white shadow transition ${
+              specialConsideration ? "translate-x-5" : "translate-x-0.5"
+            }`}
+          />
+        </button>
+        <span className="text-sm font-medium text-zinc-600 dark:text-zinc-400">
+          {specialConsideration ? "1/2 で計算" : "2/3 で計算"}
+        </span>
+      </div>
 
       {/* CSVアップロード */}
       <div className="mt-6">
@@ -175,33 +223,6 @@ export function ClassHoursFromCsv() {
             </span>
           )}
         </div>
-      </div>
-
-      {/* 特別な配慮 */}
-      <div className="mt-4 flex items-center gap-2">
-        <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
-          特別な配慮の生徒（1/2で計算）
-        </span>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={specialConsideration}
-          onClick={() => setSpecialConsideration((v) => !v)}
-          className={`relative inline-flex h-6 w-11 shrink-0 rounded-full border transition-colors focus:outline-none focus:ring-2 focus:ring-zinc-400 ${
-            specialConsideration
-              ? "border-emerald-500 bg-emerald-500"
-              : "border-zinc-300 bg-zinc-200 dark:border-zinc-600 dark:bg-zinc-700"
-          }`}
-        >
-          <span
-            className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow transition ${
-              specialConsideration ? "translate-x-5" : "translate-x-0.5"
-            }`}
-          />
-        </button>
-        <span className="text-xs text-zinc-500">
-          {specialConsideration ? "1/2" : "2/3"}
-        </span>
       </div>
 
       {/* 授業登録フォーム */}
@@ -268,7 +289,7 @@ export function ClassHoursFromCsv() {
           </div>
 
           <div className="mt-3 overflow-x-auto">
-            <table className="w-full min-w-[480px] border-collapse text-sm">
+            <table className="w-full min-w-[520px] border-collapse text-sm">
               <thead>
                 <tr className="border-b border-zinc-200 dark:border-zinc-700">
                   <th className="py-2 pr-2 text-left font-medium text-zinc-600 dark:text-zinc-400">
@@ -283,44 +304,88 @@ export function ClassHoursFromCsv() {
                   <th className="py-2 pr-2 text-right font-medium text-zinc-600 dark:text-zinc-400">
                     必要出席日数（{specialConsideration ? "1/2" : "2/3"}）
                   </th>
-                  <th className="w-10 py-2" />
+                  <th className="py-2 text-center font-medium text-zinc-600 dark:text-zinc-400">
+                    操作
+                  </th>
                 </tr>
               </thead>
               <tbody>
-                {displayList.map((row) => (
-                  <tr
-                    key={row.id}
-                    className="border-b border-zinc-100 dark:border-zinc-800"
-                  >
-                    <td className="py-2.5 pr-2 font-medium text-zinc-900 dark:text-zinc-100">
-                      {row.name}
-                    </td>
-                    <td className="py-2.5 pr-2 text-zinc-600 dark:text-zinc-400">
-                      {weekdaysDisplay(row.weekdays)}
-                    </td>
-                    <td className="py-2.5 pr-2 text-right tabular-nums text-zinc-900 dark:text-zinc-100">
-                      {hasResults ? row.totalHours : "—"}
-                    </td>
-                    <td className="py-2.5 pr-2 text-right tabular-nums text-zinc-900 dark:text-zinc-100">
-                      {hasResults ? row.requiredAttendance : "—"}
-                    </td>
-                    <td className="py-2.5">
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveClass(row.id)}
-                        className="rounded p-1 text-zinc-500 hover:bg-zinc-200 hover:text-zinc-800 dark:hover:bg-zinc-700 dark:hover:text-zinc-200"
-                        aria-label="削除"
-                      >
-                        ×
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                {displayList.map((row) => {
+                  const adj = adjustments[row.id] ?? { add: 0, subtract: 0 };
+                  const hasAdj = adj.add > 0 || adj.subtract > 0;
+                  return (
+                    <tr
+                      key={row.id}
+                      className="border-b border-zinc-100 dark:border-zinc-800"
+                    >
+                      <td className="py-2.5 pr-2 font-medium text-zinc-900 dark:text-zinc-100">
+                        {row.name}
+                      </td>
+                      <td className="py-2.5 pr-2 text-zinc-600 dark:text-zinc-400">
+                        {weekdaysDisplay(row.weekdays)}
+                      </td>
+                      <td className="py-2.5 pr-2 text-right tabular-nums text-zinc-900 dark:text-zinc-100">
+                        {hasResults ? (
+                          <span>
+                            {row.totalHours}
+                            {hasAdj && (
+                              <span className="ml-1 text-xs text-zinc-500 dark:text-zinc-400">
+                                {adj.add > 0 && <span className="text-emerald-600 dark:text-emerald-400">+{adj.add}</span>}
+                                {adj.add > 0 && adj.subtract > 0 && " "}
+                                {adj.subtract > 0 && <span className="text-red-600 dark:text-red-400">-{adj.subtract}</span>}
+                              </span>
+                            )}
+                          </span>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                      <td className="py-2.5 pr-2 text-right tabular-nums text-zinc-900 dark:text-zinc-100">
+                        {hasResults ? row.requiredAttendance : "—"}
+                      </td>
+                      <td className="py-2.5">
+                        <div className="flex items-center justify-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => setEditingClassId(row.id)}
+                            className="rounded bg-zinc-200 px-2 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-300 dark:bg-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-500"
+                          >
+                            編集（時数）
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveClass(row.id)}
+                            className="rounded p-1 text-zinc-500 hover:bg-zinc-200 hover:text-zinc-800 dark:hover:bg-zinc-700 dark:hover:text-zinc-200"
+                            aria-label="削除"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         </div>
       )}
+
+      {editingClassId && (() => {
+        const cls = classes.find((c) => c.id === editingClassId);
+        const adj = adjustments[editingClassId] ?? { add: 0, subtract: 0 };
+        return cls ? (
+          <ClassHoursAdjustModal
+            isOpen={true}
+            classId={editingClassId}
+            className={cls.name}
+            currentAdd={adj.add}
+            currentSubtract={adj.subtract}
+            onClose={() => setEditingClassId(null)}
+            onSave={(add, subtract) => handleSaveAdjustment(editingClassId, add, subtract)}
+          />
+        ) : null;
+      })()}
     </section>
   );
 }
