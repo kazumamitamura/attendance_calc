@@ -8,10 +8,18 @@ import { saveAs } from "file-saver";
 
 export interface PrintExportRow {
   name: string;
+  /** 設定（曜日・時限） */
+  slotsDisplay: string;
+  totalHours: number;
   requiredAttendance: number;
   currentAttendance: number;
+  faceToFaceDays: number;
   remainingClassDays: number;
   supplementaryNeeded: number;
+  /** 条件達成までの日数（必要出席 − 出席実績）。0以下は達成 */
+  daysUntilCondition: number;
+  /** 猶予日数（残り授業日数 − 条件達成までの日数） */
+  graceDays: number;
   supplementaryRecords: { date: string; content: string }[];
   faceToFaceRecords: { date: string; content: string }[];
 }
@@ -104,14 +112,19 @@ export async function downloadPrintExcel(payload: PrintExportPayload): Promise<v
     }
   }
 
-  // 明細テーブル（7行目〜）
+  // 明細テーブル（7行目〜）※WEB画面と同じ列順 + 補修実施記録・対面授業記録
   const dataStartRow = 7;
   const headers = [
     "授業名",
-    "必要な出席日数",
-    "現在の出席実績",
+    "設定（曜日・時限）",
+    "総授業時数",
+    "必要出席",
+    "出席実績",
+    "対面授業",
     "残り授業日数",
     "補修が必要な日数",
+    "条件達成までの日数",
+    "猶予日数",
     "補修実施記録",
     "対面授業記録",
   ];
@@ -127,15 +140,21 @@ export async function downloadPrintExcel(payload: PrintExportPayload): Promise<v
 
   payload.rows.forEach((row, i) => {
     const r = dataStartRow + 1 + i;
+    const daysUntil = row.daysUntilCondition ?? 0;
     ws.getCell(r, 1).value = row.name ?? "—";
-    ws.getCell(r, 2).value = row.requiredAttendance ?? 0;
-    ws.getCell(r, 3).value = row.currentAttendance ?? 0;
-    ws.getCell(r, 4).value = row.remainingClassDays ?? 0;
-    ws.getCell(r, 5).value = row.supplementaryNeeded ?? 0;
-    ws.getCell(r, 6).value = joinRecords(row.supplementaryRecords ?? []);
-    ws.getCell(r, 7).value = joinRecords(row.faceToFaceRecords ?? []);
+    ws.getCell(r, 2).value = row.slotsDisplay || "—";
+    ws.getCell(r, 3).value = row.totalHours ?? 0;
+    ws.getCell(r, 4).value = row.requiredAttendance ?? 0;
+    ws.getCell(r, 5).value = row.currentAttendance ?? 0;
+    ws.getCell(r, 6).value = row.faceToFaceDays ?? 0;
+    ws.getCell(r, 7).value = row.remainingClassDays ?? 0;
+    ws.getCell(r, 8).value = row.supplementaryNeeded ?? 0;
+    ws.getCell(r, 9).value = daysUntil <= 0 ? "達成" : daysUntil;
+    ws.getCell(r, 10).value = row.graceDays ?? 0;
+    ws.getCell(r, 11).value = joinRecords(row.supplementaryRecords ?? []);
+    ws.getCell(r, 12).value = joinRecords(row.faceToFaceRecords ?? []);
 
-    for (let c = 1; c <= 7; c++) {
+    for (let c = 1; c <= headers.length; c++) {
       const cell = ws.getCell(r, c);
       cell.border = thinBorder;
       cell.alignment = { wrapText: true, vertical: "middle" };
@@ -143,13 +162,18 @@ export async function downloadPrintExcel(payload: PrintExportPayload): Promise<v
   });
 
   ws.columns = [
-    { width: 22 },
-    { width: 14 },
-    { width: 14 },
+    { width: 18 },
+    { width: 18 },
+    { width: 12 },
+    { width: 10 },
+    { width: 10 },
+    { width: 10 },
+    { width: 12 },
     { width: 14 },
     { width: 16 },
-    { width: 36 },
-    { width: 36 },
+    { width: 10 },
+    { width: 28 },
+    { width: 28 },
   ];
 
   const buffer = await wb.xlsx.writeBuffer();

@@ -350,12 +350,18 @@ export function ClassHoursFromCsv({
           ? countFutureClassSlots(validDays, slots, referenceDate.trim() || undefined)
           : 0;
       const supplementaryNeeded = Math.max(0, remaining - remainingClassDays);
+      const graceDays = remainingClassDays - remaining;
       return {
         name: row.name,
+        slotsDisplay: slotsDisplay(row.weekdays, row.periods ?? [null, null, null, null]),
+        totalHours: row.totalHours ?? 0,
         requiredAttendance: required,
         currentAttendance: currentAtt,
+        faceToFaceDays: row.faceToFaceDays ?? 0,
         remainingClassDays,
         supplementaryNeeded,
+        daysUntilCondition: remaining,
+        graceDays,
         supplementaryRecords: supplementaryByClass[row.id] ?? [],
         faceToFaceRecords: faceToFaceRecordsByClass[row.id] ?? [],
       };
@@ -616,7 +622,7 @@ export function ClassHoursFromCsv({
           </div>
 
           <div className="mt-3 overflow-x-auto">
-            <table className="w-full min-w-[640px] border-collapse text-sm">
+            <table className="w-full min-w-[780px] border-collapse text-sm">
               <thead>
                 <tr className="border-b border-zinc-200 dark:border-zinc-700">
                   <th className="py-2 pr-2 text-left font-medium text-zinc-600 dark:text-zinc-400">
@@ -646,6 +652,9 @@ export function ClassHoursFromCsv({
                   <th className="py-2 pr-2 font-medium text-zinc-600 dark:text-zinc-400">
                     条件達成までの日数
                   </th>
+                  <th className="py-2 pr-2 text-right font-medium text-zinc-600 dark:text-zinc-400">
+                    猶予日数
+                  </th>
                   <th className="py-2 text-center font-medium text-zinc-600 dark:text-zinc-400">
                     操作
                   </th>
@@ -661,6 +670,7 @@ export function ClassHoursFromCsv({
                   const slots = toSlots(row.weekdays, row.periods ?? [null, null, null, null]);
                   const remainingClassDays = hasResults && validDays.length > 0 ? countFutureClassSlots(validDays, slots, referenceDate.trim() || undefined) : 0;
                   const supplementaryNeeded = Math.max(0, remaining - remainingClassDays);
+                  const graceDays = remainingClassDays - remaining;
                   const status = getRemainingDaysStatus(remaining);
                   const colors = getRemainingDaysColors(status);
                   const gaugePercent = required > 0 ? Math.min(100, Math.round((100 * currentAtt) / required)) : 0;
@@ -801,6 +811,24 @@ export function ClassHoursFromCsv({
                           </div>
                         )}
                       </td>
+                      <td className="py-2.5 pr-2 text-right tabular-nums">
+                        {hasResults ? (
+                          <span
+                            className={
+                              graceDays < 0
+                                ? "font-medium text-red-600 dark:text-red-400"
+                                : graceDays === 0
+                                  ? "text-zinc-700 dark:text-zinc-300"
+                                  : "text-emerald-600 dark:text-emerald-400"
+                            }
+                            title="残り授業日数 − 条件達成までの日数"
+                          >
+                            {graceDays}日
+                          </span>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
                       <td className="py-2.5">
                         <div className="flex items-center justify-center gap-1" onClick={(e) => e.stopPropagation()}>
                           <button
@@ -823,7 +851,7 @@ export function ClassHoursFromCsv({
                     </tr>
                     {isExpanded && (
                       <tr key={`${row.id}-detail`} className="border-b border-zinc-100 bg-zinc-50/50 dark:border-zinc-800 dark:bg-zinc-800/30">
-                        <td colSpan={10} className="px-4 py-4">
+                        <td colSpan={11} className="px-4 py-4">
                           <div className="space-y-4 rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-700 dark:bg-zinc-900">
                             {/* 過不足メッセージ */}
                             {remaining <= 0 ? (
