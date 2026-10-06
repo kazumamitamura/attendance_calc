@@ -47,6 +47,65 @@ export function createDefaultPattern(): SchedulePattern {
   };
 }
 
+export function isSamePeriod(a: SchedulePattern, b: SchedulePattern): boolean {
+  return (
+    a.startMonth === b.startMonth &&
+    a.startDay === b.startDay &&
+    a.endMonth === b.endMonth &&
+    a.endDay === b.endDay
+  );
+}
+
+export function applyPeriodToPattern(pattern: SchedulePattern, period: SchedulePattern): SchedulePattern {
+  return {
+    ...pattern,
+    startMonth: period.startMonth,
+    startDay: period.startDay,
+    endMonth: period.endMonth,
+    endDay: period.endDay,
+  };
+}
+
+/** 同じ期間なら上書き、違う期間なら追加（最大5） */
+export function upsertPatterns(existing: SchedulePattern[], incoming: SchedulePattern[]): SchedulePattern[] {
+  const next = existing.map((p) => ({
+    ...p,
+    weekdays: [...(p.weekdays ?? emptySlotArray())],
+    periods: [...(p.periods ?? emptySlotArray())],
+  }));
+  for (const p of incoming) {
+    const incomingPattern = {
+      ...p,
+      weekdays: [...(p.weekdays ?? emptySlotArray())],
+      periods: [...(p.periods ?? emptySlotArray())],
+    };
+    const idx = next.findIndex((e) => isSamePeriod(e, incomingPattern));
+    if (idx >= 0) {
+      next[idx] = incomingPattern;
+    } else if (next.length < MAX_SCHEDULE_PATTERNS) {
+      next.push(incomingPattern);
+    }
+  }
+  return next;
+}
+
+export function consolidateClassesByName<T extends { id: string; name: string; patterns: SchedulePattern[] }>(
+  list: T[]
+): T[] {
+  const order: string[] = [];
+  const map = new Map<string, T>();
+  for (const item of list) {
+    const existing = map.get(item.name);
+    if (!existing) {
+      map.set(item.name, { ...item, patterns: [...(item.patterns ?? [])] });
+      order.push(item.name);
+    } else {
+      existing.patterns = upsertPatterns(existing.patterns ?? [], item.patterns ?? []);
+    }
+  }
+  return order.map((name) => map.get(name)!);
+}
+
 /** 学校年度の月日を Date にする。4〜12月＝対象年度、1〜3月＝対象年度+1 */
 export function academicDateFromMonthDay(
   month: number,

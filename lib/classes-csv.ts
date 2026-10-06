@@ -152,11 +152,13 @@ export interface ParsedClassRow {
   /** 授業出席日数（現在の出席時数の初期値）。未入力・不正は 0 */
   attendanceCount: number;
   patterns: SchedulePattern[];
+  /** CSVに開始・終了が入っていたか。false なら画面の期間パターンの日付を使う */
+  explicitDates: boolean;
 }
 
 /**
- * 授業登録CSVを解析。期間付きは同一授業名を最大5パターンにまとめる。
- * 旧形式（C列が曜日）は1行=1授業の通年パターンとして扱う。
+ * 授業登録CSVを解析。同一授業名は1授業にまとめる。
+ * 期間付きは各行をパターンとして追加。旧形式（C列が曜日）は日付なし。
  */
 export function parseClassesCsv(csvText: string): ParsedClassRow[] {
   const parsed = Papa.parse<string[]>(csvText, { skipEmptyLines: true });
@@ -165,7 +167,7 @@ export function parseClassesCsv(csvText: string): ParsedClassRow[] {
   const fileHasDateHeader = hasHeader && hasDateHeader(rows[0]);
   const dataRows = hasHeader ? rows.slice(1) : rows;
 
-  const datedByName = new Map<string, ParsedClassRow>();
+  const byName = new Map<string, ParsedClassRow>();
   const result: ParsedClassRow[] = [];
 
   for (const row of dataRows) {
@@ -173,28 +175,27 @@ export function parseClassesCsv(csvText: string): ParsedClassRow[] {
     if (!name) continue;
 
     const attendanceCount = parseAttendanceCell(row?.[1]);
+    const dated = isDatedRow(row, fileHasDateHeader);
+    const pattern = dated ? patternFromDatedRow(row) : patternFromLegacyRow(row);
 
-    if (isDatedRow(row, fileHasDateHeader)) {
-      const pattern = patternFromDatedRow(row);
-      const existing = datedByName.get(name);
-      if (existing) {
-        if (existing.patterns.length < MAX_SCHEDULE_PATTERNS) {
-          existing.patterns.push(pattern);
-        }
-        if (existing.attendanceCount === 0 && attendanceCount > 0) {
-          existing.attendanceCount = attendanceCount;
-        }
-      } else {
-        const created: ParsedClassRow = { name, attendanceCount, patterns: [pattern] };
-        datedByName.set(name, created);
-        result.push(created);
+    const existing = byName.get(name);
+    if (existing) {
+      if (existing.patterns.length < MAX_SCHEDULE_PATTERNS) {
+        existing.patterns.push(pattern);
       }
+      if (existing.attendanceCount === 0 && attendanceCount > 0) {
+        existing.attendanceCount = attendanceCount;
+      }
+      if (dated) existing.explicitDates = true;
     } else {
-      result.push({
+      const created: ParsedClassRow = {
         name,
         attendanceCount,
-        patterns: [patternFromLegacyRow(row)],
-      });
+        patterns: [pattern],
+        explicitDates: dated,
+      };
+      byName.set(name, created);
+      result.push(created);
     }
   }
 

@@ -5,11 +5,14 @@ import { parseScheduleCsv, getCurrentAcademicYear, type ValidSchoolDay } from "@
 import { parseClassesCsv, getClassesCsvTemplate } from "@/lib/classes-csv";
 import {
   MAX_SCHEDULE_PATTERNS,
+  applyPeriodToPattern,
+  consolidateClassesByName,
   countClassSlotsForPatterns,
   countFutureClassSlotsForPatterns,
   createDefaultPattern,
   formatPatternsDisplay,
   hasAnySlot,
+  upsertPatterns,
   type SchedulePattern,
 } from "@/lib/schedule-patterns";
 import { getRemainingDaysStatus, getRemainingDaysColors } from "@/lib/class-gauge-status";
@@ -101,6 +104,8 @@ export function ClassHoursFromCsv({
   const [formPatterns, setFormPatterns] = useState<SchedulePattern[]>(() => [createDefaultPattern()]);
   const [classes, setClasses] = useState<RegisteredClass[]>([]);
   const [results, setResults] = useState<ClassWithResult[]>([]);
+  const classCsvInputRef = useRef<HTMLInputElement>(null);
+  const csvPeriodOverrideRef = useRef<SchedulePattern | null>(null);
   const [internalSpecial, setInternalSpecial] = useState(false);
   const specialConsideration = onSpecialConsiderationChange != null ? (propSpecialConsideration ?? false) : internalSpecial;
   const setSpecialConsideration = onSpecialConsiderationChange ?? setInternalSpecial;
@@ -178,18 +183,25 @@ export function ClassHoursFromCsv({
   const handleAddClass = () => {
     const name = className.trim();
     if (!name) return;
-    const id = generateId();
-    const attendance = initialAttendance ?? 0;
     const withSlots = formPatterns.filter(hasAnySlot);
-    const patterns = (withSlots.length > 0 ? withSlots : [formPatterns[0] ?? createDefaultPattern()]).slice(
+    const incoming = (withSlots.length > 0 ? withSlots : [formPatterns[0] ?? createDefaultPattern()]).slice(
       0,
       MAX_SCHEDULE_PATTERNS
     );
-    setClasses((prev) => [...prev, { id, name, patterns }]);
-    setCurrentAttendances((prev) => ({ ...prev, [id]: attendance }));
+    const attendance = initialAttendance ?? 0;
+    setResults([]);
+    const existing = classes.find((c) => c.name === name);
+    if (existing) {
+      setClasses((prev) =>
+        prev.map((c) => (c.id === existing.id ? { ...c, patterns: upsertPatterns(c.patterns, incoming) } : c))
+      );
+    } else {
+      const id = generateId();
+      setClasses((prev) => [...prev, { id, name, patterns: incoming }]);
+      setCurrentAttendances((prev) => ({ ...prev, [id]: attendance }));
+    }
     setClassName("");
     setInitialAttendance(0);
-    setFormPatterns([createDefaultPattern()]);
   };
 
   const handleRemoveClass = (id: string) => {
@@ -219,69 +231,111 @@ export function ClassHoursFromCsv({
     if (editingClassId === id) setEditingClassId(null);
   };
 
+  const handleClearAllClasses = () => {
+    setClasses([]);
+    setResults([]);
+    setAdjustments({});
+    setCurrentAttendances({});
+    setSupplementaryByClass({});
+    setFaceToFaceRecordsByClass({});
+    setExpandedRowId(null);
+    setEditingClassId(null);
+  };
+
   const handleSaveAdjustment = (id: string, add: number, subtract: number, currentAttendance: number) => {
     setAdjustments((prev) => ({ ...prev, [id]: { add, subtract } }));
     setCurrentAttendances((prev) => ({ ...prev, [id]: currentAttendance }));
     setEditingClassId(null);
   };
 
+  const applyImportedRows = useCallback(
+    (rows: ReturnType<typeof parseClassesCsv>, periodOverride: SchedulePattern | null) => {
+      const fallbackPeriod = periodOverride ?? formPatterns[formPatterns.length - 1] ?? createDefaultPattern();
+      setParseError(null);
+      setResults([]);
+      let next = consolidateClassesByName(classes);
+      const attendanceUpdates: Record<string, number> = {};
+      for (const row of rows) {
+        const incoming = (row.patterns ?? [createDefaultPattern()]).map((p) =>
+          row.explicitDates ? p : applyPeriodToPattern(p, fallbackPeriod)
+        );
+        const existing = next.find((c) => c.name === row.name);
+        if (existing) {
+          next = next.map((c) =>
+            c.id === existing.id ? { ...c, patterns: upsertPatterns(c.patterns, incoming) } : c
+          );
+        } else {
+          const id = generateId();
+          next = [...next, { id, name: row.name, patterns: incoming.slice(0, MAX_SCHEDULE_PATTERNS) }];
+          attendanceUpdates[id] = row.attendanceCount ?? 0;
+        }
+      }
+      setClasses(next);
+      if (Object.keys(attendanceUpdates).length > 0) {
+        setCurrentAttendances((att) => ({ ...att, ...attendanceUpdates }));
+      }
+    },
+    [classes, formPatterns]
+  );
+
   const handleBulkClassesCsv = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
+      const periodOverride = csvPeriodOverrideRef.current;
+      csvPeriodOverrideRef.current = null;
+      e.target.value = "";
       if (!file) return;
       const reader = new FileReader();
       reader.onload = () => {
         const text = String(reader.result ?? "");
         try {
-          const rows = parseClassesCsv(text);
-          const newClasses: RegisteredClass[] = rows.map((r) => ({
-            id: generateId(),
-            name: r.name,
-            patterns: (r.patterns ?? [createDefaultPattern()]).slice(0, MAX_SCHEDULE_PATTERNS),
-          }));
-          setParseError(null);
-          setClasses((prev) => [...prev, ...newClasses]);
-          setCurrentAttendances((prev) => {
-            const next = { ...prev };
-            newClasses.forEach((c, i) => {
-              next[c.id] = rows[i]?.attendanceCount ?? 0;
-            });
-            return next;
-          });
+          applyImportedRows(parseClassesCsv(text), periodOverride);
         } catch (err) {
           setParseError(err instanceof Error ? err.message : "授業CSVの解析に失敗しました。");
         }
       };
       reader.readAsText(file, "UTF-8");
-      e.target.value = "";
     },
-    []
+    [applyImportedRows]
   );
 
-  const runCount = useCallback(() => {
-    if (validDays.length === 0 || classes.length === 0) return;
-    const isSpecialCare = specialConsideration;
-    const ratio = isSpecialCare ? 1 / 2 : 2 / 3;
-    const next: ClassWithResult[] = classes.map((c) => {
-      const baseHours = countClassSlotsForPatterns(validDays, c.patterns ?? [], academicYear);
-      const adj = adjustments[c.id] ?? { add: 0, subtract: 0 };
-      const totalHours = Math.max(0, baseHours + adj.add - adj.subtract);
-      const requiredAttendance = Math.ceil(totalHours * ratio);
-      const requiredAtTwoThirds = Math.ceil(totalHours * (2 / 3));
-      const requiredAtHalf = Math.ceil(totalHours * (1 / 2));
-      const faceToFaceDays = isSpecialCare ? Math.max(0, requiredAtTwoThirds - requiredAtHalf) : 0;
-      return {
-        ...c,
-        totalHours,
-        requiredAttendance,
-        isSpecialCare,
-        faceToFaceDays,
-      };
-    });
-    setResults(next);
-  }, [validDays, classes, specialConsideration, adjustments, academicYear]);
+  const openClassCsvPicker = (period: SchedulePattern | null) => {
+    csvPeriodOverrideRef.current = period;
+    classCsvInputRef.current?.click();
+  };
 
-  const handleCount = () => runCount();
+  const runCount = useCallback(
+    (list?: RegisteredClass[]) => {
+      const source = consolidateClassesByName(list ?? classes);
+      if (validDays.length === 0 || source.length === 0) return;
+      const isSpecialCare = specialConsideration;
+      const ratio = isSpecialCare ? 1 / 2 : 2 / 3;
+      const next: ClassWithResult[] = source.map((c) => {
+        const baseHours = countClassSlotsForPatterns(validDays, c.patterns ?? [], academicYear);
+        const adj = adjustments[c.id] ?? { add: 0, subtract: 0 };
+        const totalHours = Math.max(0, baseHours + adj.add - adj.subtract);
+        const requiredAttendance = Math.ceil(totalHours * ratio);
+        const requiredAtTwoThirds = Math.ceil(totalHours * (2 / 3));
+        const requiredAtHalf = Math.ceil(totalHours * (1 / 2));
+        const faceToFaceDays = isSpecialCare ? Math.max(0, requiredAtTwoThirds - requiredAtHalf) : 0;
+        return {
+          ...c,
+          totalHours,
+          requiredAttendance,
+          isSpecialCare,
+          faceToFaceDays,
+        };
+      });
+      setResults(next);
+    },
+    [validDays, classes, specialConsideration, adjustments, academicYear]
+  );
+
+  const handleCount = () => {
+    const merged = consolidateClassesByName(classes);
+    if (merged.length !== classes.length) setClasses(merged);
+    runCount(merged);
+  };
 
   // 特別な配慮のトグル変更時のみ再計算（既にカウント済みのとき）
   const prevSpecialRef = useRef<boolean>(specialConsideration);
@@ -298,11 +352,6 @@ export function ClassHoursFromCsv({
   useEffect(() => {
     if (results.length > 0) runCount();
   }, [adjustments, runCount]);
-
-  // 授業が追加されたとき（一括含む）にカウント実行
-  useEffect(() => {
-    if (validDays.length > 0 && classes.length > 0) runCount();
-  }, [classes.length, validDays.length, runCount]);
 
   // 対象年度変更時にCSVを再パース（同じテキストで年度だけ変える）
   useEffect(() => {
@@ -387,7 +436,7 @@ export function ClassHoursFromCsv({
         CSVマスターで授業時数をカウント
       </h2>
       <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-        年間行事予定CSV（A列=日付、B列=内容、C〜H列=1限〜6限）を読み込み、各時限列に「授業」が入力されている時限を稼働として、各授業の総時数・必要出席日数を算出します。前期・後期や途中変更がある授業は、期間パターン（最大5つ）ごとに曜日・時限を指定できます。
+        ①年間行事予定CSVを読み込む → ②通年同じ授業は1パターンだけ登録 → ③時間割が変わる授業は期間ごとにパターンを追加し、その期間の授業実施日から時数を出す → ④登録が終わったら「カウント」。各パターンの時数を合計してから必要出席（2/3 または 1/2）などを計算します。
       </p>
 
       {/* 対象年度・基準日・クラス・氏名・Excel出力 */}
@@ -519,7 +568,7 @@ export function ClassHoursFromCsv({
           授業を追加
         </h3>
         <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-          時間割が変わる期間ごとにパターンを追加します（最大{MAX_SCHEDULE_PATTERNS}）。例: 前期 4/1〜9/30、後期 10/1〜3/31。期間が重なる日は上のパターンを使います。
+          同じ授業名は1行にまとめます。Aパターンの期間を入れて「この期間の時間割をCSVで登録」→ 必要ならBパターンを追加して同じ操作 → 最後に「カウント」。
         </p>
         <div className="mt-3 flex flex-wrap items-end gap-3">
           <div className="w-40">
@@ -666,11 +715,25 @@ export function ClassHoursFromCsv({
                   </span>
                 ))}
               </div>
+              <button
+                type="button"
+                onClick={() => openClassCsvPicker(pattern)}
+                className="mt-3 rounded-lg border border-sky-300 bg-sky-50 px-3 py-1.5 text-xs font-medium text-sky-800 hover:bg-sky-100 dark:border-sky-700 dark:bg-sky-950/40 dark:text-sky-200 dark:hover:bg-sky-900/50"
+              >
+                この期間の時間割をCSVで登録
+              </button>
             </div>
           ))}
         </div>
 
         <div className="mt-3 flex flex-wrap items-center gap-2">
+          <input
+            ref={classCsvInputRef}
+            type="file"
+            accept=".csv"
+            onChange={handleBulkClassesCsv}
+            className="sr-only"
+          />
           <button
             type="button"
             onClick={handleAddFormPattern}
@@ -686,15 +749,13 @@ export function ClassHoursFromCsv({
           >
             授業を追加
           </button>
-          <label className="cursor-pointer rounded-lg border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700">
-            <input
-              type="file"
-              accept=".csv"
-              onChange={handleBulkClassesCsv}
-              className="sr-only"
-            />
-            授業をCSVで一括登録
-          </label>
+          <button
+            type="button"
+            onClick={() => openClassCsvPicker(null)}
+            className="rounded-lg border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+          >
+            日付入りCSVを一括登録
+          </button>
           <button
             type="button"
             onClick={downloadClassesTemplate}
@@ -704,7 +765,7 @@ export function ClassHoursFromCsv({
           </button>
         </div>
         <p className="mt-2 text-xs text-zinc-500">
-          一括登録CSV（推奨）: 同一授業名を行を分けて最大{MAX_SCHEDULE_PATTERNS}パターン。A列=授業名, B列=出席実績（2行目以降は空欄可）, C列=開始, D列=終了, E列以降=曜日①・時限①…曜日④・時限④。日付は「4月1日」「4/1」「2026-04-01」など。開始・終了が空欄のときは通年（4/1〜3/31）。旧形式（C列が曜日）も通年1パターンとして読み込めます。
+          曜日・時限だけの旧CSVは、各パターンの「この期間の時間割をCSVで登録」を使ってください（そのパターンの開始〜終了で年間行事から時数を取ります）。日付入りCSVは同一授業名を行分けで最大{MAX_SCHEDULE_PATTERNS}パターン。A列=授業名, B列=出席実績, C列=開始, D列=終了, E列以降=曜日・時限。同じ授業名は上書きせず1授業にパターン追加します。
         </p>
       </div>
 
@@ -713,17 +774,35 @@ export function ClassHoursFromCsv({
         <div className="mt-6">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h3 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
-              登録した授業（{classes.length}件）
+              登録した授業（{new Set(classes.map((c) => c.name)).size}件
+              {classes.length !== new Set(classes.map((c) => c.name)).size
+                ? `／表示 ${classes.length}件に重複あり。カウントで1授業にまとめます`
+                : ""}
+              ）
             </h3>
-            <button
-              type="button"
-              onClick={handleCount}
-              disabled={validDays.length === 0}
-              className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50 dark:bg-emerald-700 dark:hover:bg-emerald-600"
-            >
-              カウント
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={handleClearAllClasses}
+                className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+              >
+                登録をすべて削除
+              </button>
+              <button
+                type="button"
+                onClick={handleCount}
+                disabled={validDays.length === 0}
+                className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50 dark:bg-emerald-700 dark:hover:bg-emerald-600"
+              >
+                カウント
+              </button>
+            </div>
           </div>
+          {validDays.length === 0 && (
+            <p className="mt-2 text-xs text-amber-700 dark:text-amber-400">
+              先に年間行事予定CSVを読み込んでからカウントしてください。
+            </p>
+          )}
 
           <div className="mt-3 overflow-x-auto">
             <table className="w-full min-w-[780px] border-collapse text-sm">
