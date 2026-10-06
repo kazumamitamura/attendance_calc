@@ -18,7 +18,7 @@ export interface PrintExportRow {
   supplementaryNeeded: number;
   /** 条件達成までの日数（必要出席 − 出席実績）。0以下は達成 */
   daysUntilCondition: number;
-  /** 猶予日数（残り授業日数 − 条件達成までの日数） */
+  /** 猶予日数（残り授業回数 − 条件達成までの日数） */
   graceDays: number;
   supplementaryRecords: { date: string; content: string }[];
   faceToFaceRecords: { date: string; content: string }[];
@@ -121,7 +121,7 @@ export async function downloadPrintExcel(payload: PrintExportPayload): Promise<v
     "必要出席",
     "出席実績",
     "対面授業",
-    "残り授業日数",
+    "残り授業回数",
     "補修が必要な日数",
     "条件達成までの日数",
     "猶予日数",

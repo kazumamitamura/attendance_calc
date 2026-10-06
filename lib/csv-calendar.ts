@@ -149,19 +149,72 @@ export function countClassSlotsWithDuplicates(
   return total;
 }
 
-/** 基準日文字列 YYYY-MM-DD をその日の0時0分（ローカル）の Date に。無効・未指定時は今日の0時 */
-function getReferenceDateStart(refDateStr: string | undefined): Date {
-  if (refDateStr && /^\d{4}-\d{2}-\d{2}$/.test(refDateStr.trim())) {
-    const [y, m, d] = refDateStr.split("-").map(Number);
-    const date = new Date(y, m - 1, d);
-    if (!Number.isNaN(date.getTime())) return date;
+function pad2(n: number): string {
+  return String(n).padStart(2, "0");
+}
+
+/** YYYY-MM-DD（または YYYY/M/D）を正規化。無効なら null */
+export function normalizeYmd(value?: string | null): string | null {
+  if (value == null) return null;
+  const s = String(value).trim();
+  const m = s.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+  if (!m) return null;
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  return `${m[1]}-${pad2(month)}-${pad2(day)}`;
+}
+
+export function todayYmd(): string {
+  const n = new Date();
+  return `${n.getFullYear()}-${pad2(n.getMonth() + 1)}-${pad2(n.getDate())}`;
+}
+
+export function referenceYmd(referenceDateStr?: string | null): string {
+  return normalizeYmd(referenceDateStr) ?? todayYmd();
+}
+
+function dateObjectToYmd(value: unknown): string | null {
+  let date: Date | null = null;
+  if (value instanceof Date) {
+    date = value;
+  } else if (typeof value === "string" || typeof value === "number") {
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) date = parsed;
   }
-  const now = new Date();
-  return new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  if (!date || Number.isNaN(date.getTime()) || date.getTime() === 0) return null;
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
+}
+
+function ymdFromMonthDay(dateStr: string, academicYear?: number): string | null {
+  const match = String(dateStr).trim().match(/(\d{1,2})月\s*(\d{1,2})日/);
+  if (!match) return null;
+  const month = parseInt(match[1], 10);
+  const day = parseInt(match[2], 10);
+  const year =
+    academicYear != null ? (month >= 4 ? academicYear : academicYear + 1) : new Date().getFullYear();
+  return `${year}-${pad2(month)}-${pad2(day)}`;
 }
 
 /**
- * 「基準日」以降の授業日数のみを、曜日・時限スロットに基づいてカウント（残り授業日数）
+ * 年間行事予定の1日を YYYY-MM-DD にする。
+ * CSV の「〇月〇日」を優先し、Date のタイムゾーンずれに依存しない。
+ */
+export function schoolDayYmd(day: ValidSchoolDay, academicYear?: number): string {
+  return ymdFromMonthDay(day.dateStr, academicYear) ?? dateObjectToYmd(day.date) ?? "0000-00-00";
+}
+
+/** 基準日以降（当日を含む）か。暦日の文字列比較で判定する */
+export function isSchoolDayOnOrAfterReference(
+  day: ValidSchoolDay,
+  referenceDateStr?: string | null,
+  academicYear?: number
+): boolean {
+  return schoolDayYmd(day, academicYear) >= referenceYmd(referenceDateStr);
+}
+
+/**
+ * 「基準日」以降の授業実施回数のみを、曜日・時限スロットに基づいてカウント（残り授業回数）
  * referenceDateStr: YYYY-MM-DD。未指定・無効時は今日を使用
  */
 export function countFutureClassSlots(
@@ -169,8 +222,7 @@ export function countFutureClassSlots(
   slots: ClassSlot[],
   referenceDateStr?: string
 ): number {
-  const refStart = getReferenceDateStart(referenceDateStr);
-  const futureDays = validDays.filter((d) => d.date >= refStart);
+  const futureDays = validDays.filter((d) => isSchoolDayOnOrAfterReference(d, referenceDateStr));
   let total = 0;
   for (const slot of slots) {
     const { weekday, period } = slot;

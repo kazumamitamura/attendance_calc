@@ -4,7 +4,7 @@
  * 日付は学校年度（4月〜翌3月）で解釈する。
  */
 
-import type { ClassSlot, ValidSchoolDay } from "@/lib/csv-calendar";
+import { isSchoolDayOnOrAfterReference, schoolDayYmd, type ClassSlot, type ValidSchoolDay } from "@/lib/csv-calendar";
 
 export const MAX_SCHEDULE_PATTERNS = 5;
 export const SLOTS_PER_PATTERN = 4;
@@ -137,6 +137,17 @@ export function isDateInPattern(
   return t >= a || t <= b;
 }
 
+function ymdLocal(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+export function isYmdInPattern(ymd: string, pattern: SchedulePattern, academicYear: number): boolean {
+  const start = ymdLocal(academicDateFromMonthDay(pattern.startMonth, pattern.startDay, academicYear));
+  const end = ymdLocal(academicDateFromMonthDay(pattern.endMonth, pattern.endDay, academicYear));
+  if (start <= end) return ymd >= start && ymd <= end;
+  return ymd >= start || ymd <= end;
+}
+
 /** 期間が重なる場合は配列の先頭パターンを優先 */
 export function findPatternForDate(
   date: Date,
@@ -145,6 +156,18 @@ export function findPatternForDate(
 ): SchedulePattern | null {
   for (const p of patterns) {
     if (isDateInPattern(date, p, academicYear)) return p;
+  }
+  return null;
+}
+
+export function findPatternForSchoolDay(
+  day: ValidSchoolDay,
+  patterns: SchedulePattern[],
+  academicYear: number
+): SchedulePattern | null {
+  const ymd = schoolDayYmd(day, academicYear);
+  for (const p of patterns) {
+    if (isYmdInPattern(ymd, p, academicYear)) return p;
   }
   return null;
 }
@@ -186,21 +209,11 @@ export function countClassSlotsForPatterns(
 ): number {
   let total = 0;
   for (const day of validDays) {
-    const pattern = findPatternForDate(day.date, patterns, academicYear);
+    const pattern = findPatternForSchoolDay(day, patterns, academicYear);
     if (!pattern) continue;
     total += countSlotsOnDay(day, toSlots(pattern.weekdays, pattern.periods));
   }
   return total;
-}
-
-function getReferenceDateStart(refDateStr: string | undefined): Date {
-  if (refDateStr && /^\d{4}-\d{2}-\d{2}$/.test(refDateStr.trim())) {
-    const [y, m, d] = refDateStr.split("-").map(Number);
-    const date = new Date(y, m - 1, d);
-    if (!Number.isNaN(date.getTime())) return date;
-  }
-  const now = new Date();
-  return new Date(now.getFullYear(), now.getMonth(), now.getDate());
 }
 
 export function countFutureClassSlotsForPatterns(
@@ -209,9 +222,8 @@ export function countFutureClassSlotsForPatterns(
   academicYear: number,
   referenceDateStr?: string
 ): number {
-  const refStart = getReferenceDateStart(referenceDateStr);
   return countClassSlotsForPatterns(
-    validDays.filter((d) => d.date >= refStart),
+    validDays.filter((d) => isSchoolDayOnOrAfterReference(d, referenceDateStr, academicYear)),
     patterns,
     academicYear
   );

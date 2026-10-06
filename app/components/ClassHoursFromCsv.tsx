@@ -52,6 +52,8 @@ export interface RegisteredClass {
 interface ClassWithResult extends RegisteredClass {
   totalHours: number;
   requiredAttendance: number;
+  /** 基準日以降の授業実施回数 */
+  remainingClassSessions: number;
   /** この授業で特別な配慮(1/2)がONか */
   isSpecialCare: boolean;
   /** 対面授業として必要な日数（1/2 ON時のみ > 0） */
@@ -93,7 +95,7 @@ export function ClassHoursFromCsv({
   const [parseError, setParseError] = useState<string | null>(null);
   /** 対象年度（学校年度）。4月〜翌3月。例: 2026年2月 → 2025 */
   const [academicYear, setAcademicYear] = useState<number>(() => getCurrentAcademicYear());
-  /** 基準日（残り授業日数の「この日以降」に使う）。YYYY-MM-DD。未入力時は今日で計算 */
+  /** 基準日（残り授業回数の「この日以降」に使う）。YYYY-MM-DD。未入力時は今日で計算 */
   const [referenceDate, setReferenceDate] = useState<string>(() => formatToday());
   const [classNameExport, setClassNameExport] = useState<string>("");
   const [studentNameExport, setStudentNameExport] = useState<string>("");
@@ -318,17 +320,24 @@ export function ClassHoursFromCsv({
         const requiredAtTwoThirds = Math.ceil(totalHours * (2 / 3));
         const requiredAtHalf = Math.ceil(totalHours * (1 / 2));
         const faceToFaceDays = isSpecialCare ? Math.max(0, requiredAtTwoThirds - requiredAtHalf) : 0;
+        const remainingClassSessions = countFutureClassSlotsForPatterns(
+          validDays,
+          c.patterns ?? [],
+          academicYear,
+          referenceDate.trim() || undefined
+        );
         return {
           ...c,
           totalHours,
           requiredAttendance,
+          remainingClassSessions,
           isSpecialCare,
           faceToFaceDays,
         };
       });
       setResults(next);
     },
-    [validDays, classes, specialConsideration, adjustments, academicYear]
+    [validDays, classes, specialConsideration, adjustments, academicYear, referenceDate]
   );
 
   const handleCount = () => {
@@ -373,6 +382,7 @@ export function ClassHoursFromCsv({
         ...c,
         totalHours: 0,
         requiredAttendance: 0,
+        remainingClassSessions: 0,
         isSpecialCare: specialConsideration,
         faceToFaceDays: 0,
       }));
@@ -382,7 +392,7 @@ export function ClassHoursFromCsv({
       const required = row.requiredAttendance ?? 0;
       const currentAtt = currentAttendances[row.id] ?? 0;
       const remaining = required > 0 ? required - currentAtt : 0;
-      const remainingClassDays =
+      const remainingClassSessions =
         hasResults && validDays.length > 0
           ? countFutureClassSlotsForPatterns(
               validDays,
@@ -391,8 +401,8 @@ export function ClassHoursFromCsv({
               referenceDate.trim() || undefined
             )
           : 0;
-      const supplementaryNeeded = Math.max(0, remaining - remainingClassDays);
-      const graceDays = remainingClassDays - remaining;
+      const supplementaryNeeded = Math.max(0, remaining - remainingClassSessions);
+      const graceDays = remainingClassSessions - remaining;
       return {
         name: row.name,
         slotsDisplay: formatPatternsDisplay(row.patterns),
@@ -400,7 +410,7 @@ export function ClassHoursFromCsv({
         requiredAttendance: required,
         currentAttendance: currentAtt,
         faceToFaceDays: row.faceToFaceDays ?? 0,
-        remainingClassDays,
+        remainingClassDays: remainingClassSessions,
         supplementaryNeeded,
         daysUntilCondition: remaining,
         graceDays,
@@ -445,7 +455,7 @@ export function ClassHoursFromCsv({
           対象年度・基準日・印刷用
         </h3>
         <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
-          残り授業日数は「基準日」以降の日程でカウントします。Excelで印刷するとクラス・氏名付きの帳票が出力されます。
+          残り授業回数は「基準日」以降の授業実施回数です。「カウント」で再計算します。Excelで印刷するとクラス・氏名付きの帳票が出力されます。
         </p>
         <div className="mt-3 flex flex-wrap items-end gap-4">
           <div>
@@ -471,7 +481,7 @@ export function ClassHoursFromCsv({
               value={referenceDate}
               onChange={(e) => setReferenceDate(e.target.value)}
               className="mt-1 rounded border border-zinc-300 bg-white px-3 py-2 text-sm tabular-nums dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
-              aria-label="基準日（残り授業はこの日以降をカウント）"
+              aria-label="基準日（残り授業回数はこの日以降をカウント）"
             />
           </div>
           <div>
@@ -827,7 +837,7 @@ export function ClassHoursFromCsv({
                     対面授業
                   </th>
                   <th className="py-2 pr-2 text-right font-medium text-zinc-600 dark:text-zinc-400">
-                    残り授業日数
+                    残り授業回数
                   </th>
                   <th className="py-2 pr-2 text-right font-medium text-zinc-600 dark:text-zinc-400">
                     補修が必要な日数
@@ -850,7 +860,7 @@ export function ClassHoursFromCsv({
                   const currentAtt = currentAttendances[row.id] ?? 0;
                   const required = row.requiredAttendance ?? 0;
                   const remaining = required > 0 ? required - currentAtt : 0;
-                  const remainingClassDays =
+                  const remainingClassSessions =
                     hasResults && validDays.length > 0
                       ? countFutureClassSlotsForPatterns(
                           validDays,
@@ -859,8 +869,8 @@ export function ClassHoursFromCsv({
                           referenceDate.trim() || undefined
                         )
                       : 0;
-                  const supplementaryNeeded = Math.max(0, remaining - remainingClassDays);
-                  const graceDays = remainingClassDays - remaining;
+                  const supplementaryNeeded = Math.max(0, remaining - remainingClassSessions);
+                  const graceDays = remainingClassSessions - remaining;
                   const status = getRemainingDaysStatus(remaining);
                   const colors = getRemainingDaysColors(status);
                   const gaugePercent = required > 0 ? Math.min(100, Math.round((100 * currentAtt) / required)) : 0;
@@ -966,13 +976,13 @@ export function ClassHoursFromCsv({
                         対面授業: {faceToFace}日
                       </td>
                       <td className="py-2.5 pr-2 text-right tabular-nums text-zinc-700 dark:text-zinc-300">
-                        {hasResults ? `${remainingClassDays}日` : "—"}
+                        {hasResults ? `${remainingClassSessions}回` : "—"}
                       </td>
                       <td className="py-2.5 pr-2 text-right">
                         {hasResults ? (
                           <>
                             <div className="text-xs text-zinc-500 dark:text-zinc-400">
-                              ①{remaining}日 − ②{remainingClassDays}回 = ③{supplementaryNeeded <= 0 ? "0日" : `${supplementaryNeeded}日不足`}
+                              ①{remaining}日 − ②{remainingClassSessions}回 = ③{supplementaryNeeded <= 0 ? "0日" : `${supplementaryNeeded}日不足`}
                             </div>
                             {supplementaryNeeded <= 0 ? (
                               <span className="tabular-nums text-blue-600 dark:text-blue-400">0日</span>
@@ -1011,7 +1021,7 @@ export function ClassHoursFromCsv({
                                   ? "text-zinc-700 dark:text-zinc-300"
                                   : "text-emerald-600 dark:text-emerald-400"
                             }
-                            title="残り授業日数 − 条件達成までの日数"
+                            title="残り授業回数 − 条件達成までの日数"
                           >
                             {graceDays}日
                           </span>
@@ -1054,7 +1064,7 @@ export function ClassHoursFromCsv({
                                   ⚠️ 授業に全て出席しても {supplementaryNeeded} 日不足します。課題等での補修が必要です。
                                 </p>
                                 <p className="mt-1 text-xs text-red-600/90 dark:text-red-400/90">
-                                  ① 条件達成まで {remaining}日 − ② 残り授業 {remainingClassDays}回 = ③ 過不足 {supplementaryNeeded}日
+                                  ① 条件達成まで {remaining}日 − ② 残り授業 {remainingClassSessions}回 = ③ 過不足 {supplementaryNeeded}日
                                 </p>
                               </div>
                             ) : (
@@ -1063,7 +1073,7 @@ export function ClassHoursFromCsv({
                                   このまま出席すれば達成可能です
                                 </p>
                                 <p className="mt-1 text-xs text-blue-600/90 dark:text-blue-400/90">
-                                  ① 条件達成まで {remaining}日、② 残り授業 {remainingClassDays}回（③ 過不足 0日）
+                                  ① 条件達成まで {remaining}日、② 残り授業 {remainingClassSessions}回（③ 過不足 0日）
                                 </p>
                               </div>
                             )}
