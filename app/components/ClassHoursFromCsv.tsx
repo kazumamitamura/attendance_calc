@@ -843,10 +843,10 @@ export function ClassHoursFromCsv({
                     補修が必要な日数
                   </th>
                   <th className="py-2 pr-2 font-medium text-zinc-600 dark:text-zinc-400">
-                    条件達成までの日数
+                    条件達成までの回数
                   </th>
                   <th className="py-2 pr-2 text-right font-medium text-zinc-600 dark:text-zinc-400">
-                    猶予日数
+                    猶予回数
                   </th>
                   <th className="py-2 text-center font-medium text-zinc-600 dark:text-zinc-400">
                     操作
@@ -1005,8 +1005,8 @@ export function ClassHoursFromCsv({
                                 style={{ width: `${gaugePercent}%` }}
                               />
                             </div>
-                            <span className={`shrink-0 text-xs tabular-nums ${colors.text}`} title="条件達成までの日数">
-                              {remaining <= 0 ? "達成" : `${remaining}日`}
+                            <span className={`shrink-0 text-xs tabular-nums ${colors.text}`} title="条件達成までの回数">
+                              {remaining <= 0 ? "達成" : `${remaining}回`}
                             </span>
                           </div>
                         )}
@@ -1021,9 +1021,9 @@ export function ClassHoursFromCsv({
                                   ? "text-zinc-700 dark:text-zinc-300"
                                   : "text-emerald-600 dark:text-emerald-400"
                             }
-                            title="残り授業回数 − 条件達成までの日数"
+                            title="残り授業回数 − 条件達成までの回数"
                           >
-                            {graceDays}日
+                            {graceDays}回
                           </span>
                         ) : (
                           "—"
@@ -1064,7 +1064,7 @@ export function ClassHoursFromCsv({
                                   ⚠️ 授業に全て出席しても {supplementaryNeeded} 日不足します。課題等での補修が必要です。
                                 </p>
                                 <p className="mt-1 text-xs text-red-600/90 dark:text-red-400/90">
-                                  ① 条件達成まで {remaining}日 − ② 残り授業 {remainingClassSessions}回 = ③ 過不足 {supplementaryNeeded}日
+                                  ① 条件達成まで {remaining}回 − ② 残り授業 {remainingClassSessions}回 = ③ 過不足 {supplementaryNeeded}日
                                 </p>
                               </div>
                             ) : (
@@ -1073,7 +1073,7 @@ export function ClassHoursFromCsv({
                                   このまま出席すれば達成可能です
                                 </p>
                                 <p className="mt-1 text-xs text-blue-600/90 dark:text-blue-400/90">
-                                  ① 条件達成まで {remaining}日、② 残り授業 {remainingClassSessions}回（③ 過不足 0日）
+                                  ① 条件達成まで {remaining}回、② 残り授業 {remainingClassSessions}回（③ 過不足 0日）
                                 </p>
                               </div>
                             )}
