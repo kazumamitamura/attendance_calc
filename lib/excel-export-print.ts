@@ -163,7 +163,7 @@ export async function downloadPrintExcel(payload: PrintExportPayload): Promise<v
 
   ws.columns = [
     { width: 18 },
-    { width: 18 },
+    { width: 36 },
     { width: 12 },
     { width: 10 },
     { width: 10 },

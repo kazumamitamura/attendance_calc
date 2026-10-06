@@ -1,8 +1,17 @@
 "use client";
 
 import React, { useState, useCallback, useEffect, useRef } from "react";
-import { parseScheduleCsv, countClassSlotsWithDuplicates, countFutureClassSlots, getCurrentAcademicYear, type ValidSchoolDay, type ClassSlot } from "@/lib/csv-calendar";
-import { parseClassesCsv } from "@/lib/classes-csv";
+import { parseScheduleCsv, getCurrentAcademicYear, type ValidSchoolDay } from "@/lib/csv-calendar";
+import { parseClassesCsv, getClassesCsvTemplate } from "@/lib/classes-csv";
+import {
+  MAX_SCHEDULE_PATTERNS,
+  countClassSlotsForPatterns,
+  countFutureClassSlotsForPatterns,
+  createDefaultPattern,
+  formatPatternsDisplay,
+  hasAnySlot,
+  type SchedulePattern,
+} from "@/lib/schedule-patterns";
 import { getRemainingDaysStatus, getRemainingDaysColors } from "@/lib/class-gauge-status";
 import { downloadPrintExcel } from "@/lib/excel-export-print";
 import { ClassHoursAdjustModal } from "./ClassHoursAdjustModal";
@@ -30,23 +39,11 @@ const PERIOD_OPTIONS: { value: number | null; label: string }[] = [
   { value: 6, label: "6限" },
 ];
 
-const WEEKDAY_LABELS: Record<number, string> = {
-  0: "日",
-  1: "月",
-  2: "火",
-  3: "水",
-  4: "木",
-  5: "金",
-  6: "土",
-};
-
 export interface RegisteredClass {
   id: string;
   name: string;
-  /** 曜日①〜④（0-6 または null） */
-  weekdays: (number | null)[];
-  /** 時限①〜④（1-6 または null）。同じインデックスで曜日・時限の1セット */
-  periods: (number | null)[];
+  /** 期間別時間割（最大5）。各期間の曜日・時限で年間時数を合算する */
+  patterns: SchedulePattern[];
 }
 
 interface ClassWithResult extends RegisteredClass {
@@ -71,29 +68,14 @@ function generateId(): string {
   return Math.random().toString(36).slice(2, 12);
 }
 
-function slotsDisplay(weekdays: (number | null)[], periods: (number | null)[]): string {
-  const parts: string[] = [];
-  for (let i = 0; i < 4; i++) {
-    const w = weekdays[i];
-    const p = periods[i];
-    if (w != null && p != null && p >= 1 && p <= 6) {
-      parts.push(`${WEEKDAY_LABELS[w]}・${p}限`);
-    }
-  }
-  return parts.length > 0 ? parts.join("、") : "—";
-}
-
-/** 有効なスロットのみ ClassSlot[] に変換（曜日・時限の両方があるもの） */
-function toSlots(weekdays: (number | null)[], periods: (number | null)[]): ClassSlot[] {
-  const slots: ClassSlot[] = [];
-  for (let i = 0; i < 4; i++) {
-    const w = weekdays[i];
-    const p = periods[i];
-    if (w != null && w >= 0 && w <= 6 && p != null && p >= 1 && p <= 6) {
-      slots.push({ weekday: w, period: p });
-    }
-  }
-  return slots;
+function downloadClassesTemplate() {
+  const blob = new Blob([getClassesCsvTemplate()], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "授業登録_ひな形.csv";
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 export function ClassHoursFromCsv({
@@ -116,18 +98,7 @@ export function ClassHoursFromCsv({
 
   const [className, setClassName] = useState("");
   const [initialAttendance, setInitialAttendance] = useState<number>(0);
-  const [classWeekdays, setClassWeekdays] = useState<(number | null)[]>([
-    null,
-    null,
-    null,
-    null,
-  ]);
-  const [classPeriods, setClassPeriods] = useState<(number | null)[]>([
-    null,
-    null,
-    null,
-    null,
-  ]);
+  const [formPatterns, setFormPatterns] = useState<SchedulePattern[]>(() => [createDefaultPattern()]);
   const [classes, setClasses] = useState<RegisteredClass[]>([]);
   const [results, setResults] = useState<ClassWithResult[]>([]);
   const [internalSpecial, setInternalSpecial] = useState(false);
@@ -169,20 +140,39 @@ export function ClassHoursFromCsv({
     [academicYear]
   );
 
-  const setWeekdayAt = (index: number, value: number | null) => {
-    setClassWeekdays((prev) => {
+  const updateFormPattern = (index: number, patch: Partial<SchedulePattern>) => {
+    setFormPatterns((prev) => {
       const next = [...prev];
-      next[index] = value;
+      next[index] = { ...next[index], ...patch };
       return next;
     });
   };
 
-  const setPeriodAt = (index: number, value: number | null) => {
-    setClassPeriods((prev) => {
+  const setFormSlot = (
+    patternIndex: number,
+    slotIndex: number,
+    field: "weekdays" | "periods",
+    value: number | null
+  ) => {
+    setFormPatterns((prev) => {
       const next = [...prev];
-      next[index] = value;
+      const pattern = next[patternIndex];
+      const arr = [...(pattern[field] ?? [null, null, null, null])];
+      arr[slotIndex] = value;
+      next[patternIndex] = { ...pattern, [field]: arr };
       return next;
     });
+  };
+
+  const handleAddFormPattern = () => {
+    setFormPatterns((prev) => {
+      if (prev.length >= MAX_SCHEDULE_PATTERNS) return prev;
+      return [...prev, createDefaultPattern()];
+    });
+  };
+
+  const handleRemoveFormPattern = (index: number) => {
+    setFormPatterns((prev) => (prev.length <= 1 ? prev : prev.filter((_, i) => i !== index)));
   };
 
   const handleAddClass = () => {
@@ -190,15 +180,16 @@ export function ClassHoursFromCsv({
     if (!name) return;
     const id = generateId();
     const attendance = initialAttendance ?? 0;
-    setClasses((prev) => [
-      ...prev,
-      { id, name, weekdays: [...classWeekdays], periods: [...classPeriods] },
-    ]);
+    const withSlots = formPatterns.filter(hasAnySlot);
+    const patterns = (withSlots.length > 0 ? withSlots : [formPatterns[0] ?? createDefaultPattern()]).slice(
+      0,
+      MAX_SCHEDULE_PATTERNS
+    );
+    setClasses((prev) => [...prev, { id, name, patterns }]);
     setCurrentAttendances((prev) => ({ ...prev, [id]: attendance }));
     setClassName("");
     setInitialAttendance(0);
-    setClassWeekdays([null, null, null, null]);
-    setClassPeriods([null, null, null, null]);
+    setFormPatterns([createDefaultPattern()]);
   };
 
   const handleRemoveClass = (id: string) => {
@@ -246,8 +237,7 @@ export function ClassHoursFromCsv({
           const newClasses: RegisteredClass[] = rows.map((r) => ({
             id: generateId(),
             name: r.name,
-            weekdays: r.weekdays,
-            periods: r.periods ?? [null, null, null, null],
+            patterns: (r.patterns ?? [createDefaultPattern()]).slice(0, MAX_SCHEDULE_PATTERNS),
           }));
           setParseError(null);
           setClasses((prev) => [...prev, ...newClasses]);
@@ -273,8 +263,7 @@ export function ClassHoursFromCsv({
     const isSpecialCare = specialConsideration;
     const ratio = isSpecialCare ? 1 / 2 : 2 / 3;
     const next: ClassWithResult[] = classes.map((c) => {
-      const slots = toSlots(c.weekdays, c.periods ?? [null, null, null, null]);
-      const baseHours = countClassSlotsWithDuplicates(validDays, slots);
+      const baseHours = countClassSlotsForPatterns(validDays, c.patterns ?? [], academicYear);
       const adj = adjustments[c.id] ?? { add: 0, subtract: 0 };
       const totalHours = Math.max(0, baseHours + adj.add - adj.subtract);
       const requiredAttendance = Math.ceil(totalHours * ratio);
@@ -290,7 +279,7 @@ export function ClassHoursFromCsv({
       };
     });
     setResults(next);
-  }, [validDays, classes, specialConsideration, adjustments]);
+  }, [validDays, classes, specialConsideration, adjustments, academicYear]);
 
   const handleCount = () => runCount();
 
@@ -344,16 +333,20 @@ export function ClassHoursFromCsv({
       const required = row.requiredAttendance ?? 0;
       const currentAtt = currentAttendances[row.id] ?? 0;
       const remaining = required > 0 ? required - currentAtt : 0;
-      const slots = toSlots(row.weekdays, row.periods ?? [null, null, null, null]);
       const remainingClassDays =
         hasResults && validDays.length > 0
-          ? countFutureClassSlots(validDays, slots, referenceDate.trim() || undefined)
+          ? countFutureClassSlotsForPatterns(
+              validDays,
+              row.patterns ?? [],
+              academicYear,
+              referenceDate.trim() || undefined
+            )
           : 0;
       const supplementaryNeeded = Math.max(0, remaining - remainingClassDays);
       const graceDays = remainingClassDays - remaining;
       return {
         name: row.name,
-        slotsDisplay: slotsDisplay(row.weekdays, row.periods ?? [null, null, null, null]),
+        slotsDisplay: formatPatternsDisplay(row.patterns),
         totalHours: row.totalHours ?? 0,
         requiredAttendance: required,
         currentAttendance: currentAtt,
@@ -394,7 +387,7 @@ export function ClassHoursFromCsv({
         CSVマスターで授業時数をカウント
       </h2>
       <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-        年間行事予定CSV（A列=日付、B列=内容、C〜H列=1限〜6限）を読み込み、各時限列に「授業」が入力されている時限を稼働として、各授業の総時数・必要出席日数を算出します。
+        年間行事予定CSV（A列=日付、B列=内容、C〜H列=1限〜6限）を読み込み、各時限列に「授業」が入力されている時限を稼働として、各授業の総時数・必要出席日数を算出します。前期・後期や途中変更がある授業は、期間パターン（最大5つ）ごとに曜日・時限を指定できます。
       </p>
 
       {/* 対象年度・基準日・クラス・氏名・Excel出力 */}
@@ -525,6 +518,9 @@ export function ClassHoursFromCsv({
         <h3 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
           授業を追加
         </h3>
+        <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+          時間割が変わる期間ごとにパターンを追加します（最大{MAX_SCHEDULE_PATTERNS}）。例: 前期 4/1〜9/30、後期 10/1〜3/31。期間が重なる日は上のパターンを使います。
+        </p>
         <div className="mt-3 flex flex-wrap items-end gap-3">
           <div className="w-40">
             <label className="block text-xs text-zinc-500">授業名</label>
@@ -547,41 +543,142 @@ export function ClassHoursFromCsv({
               className="mt-0.5 w-full rounded border border-zinc-300 bg-white px-3 py-2 text-sm tabular-nums dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
             />
           </div>
-          <div className="flex flex-wrap items-end gap-2">
-            <span className="text-xs text-zinc-500">曜日・時限（最大4セット）</span>
-            {[0, 1, 2, 3].map((i) => (
-              <span key={i} className="inline-flex items-center gap-1 rounded border border-zinc-200 bg-white px-2 py-1 dark:border-zinc-600 dark:bg-zinc-800">
-                <select
-                  value={classWeekdays[i] === null ? "" : String(classWeekdays[i])}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    setWeekdayAt(i, v === "" ? null : parseInt(v, 10));
-                  }}
-                  className="rounded border-0 bg-transparent py-1 text-sm dark:text-zinc-100"
-                >
-                  {WEEKDAY_OPTIONS.map((opt) => (
-                    <option key={opt.label} value={opt.value === null ? "" : String(opt.value)}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
-                <select
-                  value={classPeriods[i] === null ? "" : String(classPeriods[i])}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    setPeriodAt(i, v === "" ? null : parseInt(v, 10));
-                  }}
-                  className="rounded border-0 bg-transparent py-1 text-sm dark:text-zinc-100"
-                >
-                  {PERIOD_OPTIONS.map((opt) => (
-                    <option key={opt.label} value={opt.value === null ? "" : String(opt.value)}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
-              </span>
-            ))}
-          </div>
+        </div>
+
+        <div className="mt-3 space-y-3">
+          {formPatterns.map((pattern, pi) => (
+            <div
+              key={pi}
+              className="rounded-lg border border-zinc-200 bg-white p-3 dark:border-zinc-600 dark:bg-zinc-800/50"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-xs font-medium text-zinc-700 dark:text-zinc-300">
+                  パターン{pi + 1}（期間と曜日・時限）
+                </span>
+                {formPatterns.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => handleRemoveFormPattern(pi)}
+                    className="rounded px-2 py-0.5 text-xs text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 dark:hover:bg-zinc-700 dark:hover:text-zinc-200"
+                  >
+                    このパターンを削除
+                  </button>
+                )}
+              </div>
+              <div className="mt-2 flex flex-wrap items-end gap-2">
+                <label className="text-xs text-zinc-500">
+                  開始
+                  <span className="mt-0.5 flex items-center gap-1">
+                    <input
+                      type="number"
+                      min={1}
+                      max={12}
+                      value={pattern.startMonth}
+                      onChange={(e) =>
+                        updateFormPattern(pi, { startMonth: Math.min(12, Math.max(1, parseInt(e.target.value, 10) || 1)) })
+                      }
+                      className="w-14 rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm tabular-nums dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
+                      aria-label={`パターン${pi + 1} 開始月`}
+                    />
+                    <span>月</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={31}
+                      value={pattern.startDay}
+                      onChange={(e) =>
+                        updateFormPattern(pi, { startDay: Math.min(31, Math.max(1, parseInt(e.target.value, 10) || 1)) })
+                      }
+                      className="w-14 rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm tabular-nums dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
+                      aria-label={`パターン${pi + 1} 開始日`}
+                    />
+                    <span>日</span>
+                  </span>
+                </label>
+                <span className="pb-2 text-xs text-zinc-400">〜</span>
+                <label className="text-xs text-zinc-500">
+                  終了
+                  <span className="mt-0.5 flex items-center gap-1">
+                    <input
+                      type="number"
+                      min={1}
+                      max={12}
+                      value={pattern.endMonth}
+                      onChange={(e) =>
+                        updateFormPattern(pi, { endMonth: Math.min(12, Math.max(1, parseInt(e.target.value, 10) || 1)) })
+                      }
+                      className="w-14 rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm tabular-nums dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
+                      aria-label={`パターン${pi + 1} 終了月`}
+                    />
+                    <span>月</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={31}
+                      value={pattern.endDay}
+                      onChange={(e) =>
+                        updateFormPattern(pi, { endDay: Math.min(31, Math.max(1, parseInt(e.target.value, 10) || 1)) })
+                      }
+                      className="w-14 rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm tabular-nums dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
+                      aria-label={`パターン${pi + 1} 終了日`}
+                    />
+                    <span>日</span>
+                  </span>
+                </label>
+              </div>
+              <div className="mt-2 flex flex-wrap items-end gap-2">
+                <span className="text-xs text-zinc-500">曜日・時限（最大4セット）</span>
+                {[0, 1, 2, 3].map((i) => (
+                  <span
+                    key={i}
+                    className="inline-flex items-center gap-1 rounded border border-zinc-200 bg-white px-2 py-1 dark:border-zinc-600 dark:bg-zinc-800"
+                  >
+                    <select
+                      value={pattern.weekdays[i] === null || pattern.weekdays[i] === undefined ? "" : String(pattern.weekdays[i])}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setFormSlot(pi, i, "weekdays", v === "" ? null : parseInt(v, 10));
+                      }}
+                      className="rounded border-0 bg-transparent py-1 text-sm dark:text-zinc-100"
+                      aria-label={`パターン${pi + 1} 曜日${i + 1}`}
+                    >
+                      {WEEKDAY_OPTIONS.map((opt) => (
+                        <option key={opt.label} value={opt.value === null ? "" : String(opt.value)}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      value={pattern.periods[i] === null || pattern.periods[i] === undefined ? "" : String(pattern.periods[i])}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setFormSlot(pi, i, "periods", v === "" ? null : parseInt(v, 10));
+                      }}
+                      className="rounded border-0 bg-transparent py-1 text-sm dark:text-zinc-100"
+                      aria-label={`パターン${pi + 1} 時限${i + 1}`}
+                    >
+                      {PERIOD_OPTIONS.map((opt) => (
+                        <option key={opt.label} value={opt.value === null ? "" : String(opt.value)}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                  </span>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={handleAddFormPattern}
+            disabled={formPatterns.length >= MAX_SCHEDULE_PATTERNS}
+            className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+          >
+            期間パターンを追加（{formPatterns.length}/{MAX_SCHEDULE_PATTERNS}）
+          </button>
           <button
             type="button"
             onClick={handleAddClass}
@@ -598,9 +695,16 @@ export function ClassHoursFromCsv({
             />
             授業をCSVで一括登録
           </label>
+          <button
+            type="button"
+            onClick={downloadClassesTemplate}
+            className="rounded-lg border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+          >
+            CSVひな形をダウンロード
+          </button>
         </div>
         <p className="mt-2 text-xs text-zinc-500">
-          一括登録CSV: A列=授業名, B列=授業出席日数, C列=曜日①・D列=時限①, E列=曜日②・F列=時限②, G列=曜日③・H列=時限③, I列=曜日④・J列=時限④。時限は1〜6の数値。ヘッダーあり/なし両対応。
+          一括登録CSV（推奨）: 同一授業名を行を分けて最大{MAX_SCHEDULE_PATTERNS}パターン。A列=授業名, B列=出席実績（2行目以降は空欄可）, C列=開始, D列=終了, E列以降=曜日①・時限①…曜日④・時限④。日付は「4月1日」「4/1」「2026-04-01」など。開始・終了が空欄のときは通年（4/1〜3/31）。旧形式（C列が曜日）も通年1パターンとして読み込めます。
         </p>
       </div>
 
@@ -667,8 +771,15 @@ export function ClassHoursFromCsv({
                   const currentAtt = currentAttendances[row.id] ?? 0;
                   const required = row.requiredAttendance ?? 0;
                   const remaining = required > 0 ? required - currentAtt : 0;
-                  const slots = toSlots(row.weekdays, row.periods ?? [null, null, null, null]);
-                  const remainingClassDays = hasResults && validDays.length > 0 ? countFutureClassSlots(validDays, slots, referenceDate.trim() || undefined) : 0;
+                  const remainingClassDays =
+                    hasResults && validDays.length > 0
+                      ? countFutureClassSlotsForPatterns(
+                          validDays,
+                          row.patterns ?? [],
+                          academicYear,
+                          referenceDate.trim() || undefined
+                        )
+                      : 0;
                   const supplementaryNeeded = Math.max(0, remaining - remainingClassDays);
                   const graceDays = remainingClassDays - remaining;
                   const status = getRemainingDaysStatus(remaining);
@@ -720,8 +831,8 @@ export function ClassHoursFromCsv({
                           {row.name}
                         </span>
                       </td>
-                      <td className="py-2.5 pr-2 text-zinc-600 dark:text-zinc-400">
-                        {slotsDisplay(row.weekdays, row.periods ?? [null, null, null, null])}
+                      <td className="whitespace-pre-line py-2.5 pr-2 text-zinc-600 dark:text-zinc-400">
+                        {formatPatternsDisplay(row.patterns)}
                       </td>
                       <td className="py-2.5 pr-2 text-right tabular-nums text-zinc-900 dark:text-zinc-100">
                         {hasResults ? (
